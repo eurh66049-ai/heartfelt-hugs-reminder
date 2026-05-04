@@ -208,142 +208,38 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
-    // 1) اختر دفعة وعلّمها كـ "processing" بشكل ذرّي
-    const { data: claimed, error: claimError } = await supabase
-      .rpc("claim_bulk_upload_items", { p_limit: PER_BATCH_LIMIT });
+    const startedAt = Date.now();
+    const total = emptySummary();
 
-    if (claimError) {
-      console.error("[Queue] claim error:", claimError);
-      return new Response(JSON.stringify({ success: false, error: claimError.message }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    for (let round = 1; round <= MAX_ROUNDS_PER_INVOCATION; round++) {
+      if (Date.now() - startedAt > MAX_INVOCATION_MS) {
+        console.log("[Queue] ⏱️ توقف آمن قبل timeout، سيكمل cron تلقائياً");
+        break;
+      }
+
+      const part = await processQueueRound(supabase, supabaseUrl, serviceKey);
+      if (part.processed === 0) break;
+      addSummary(total, part);
     }
 
-    let items = (claimed || []) as QueueItem[];
-
-    // طبّق السقف الإجمالي وأعِد الفائض إلى pending فورًا حتى لا يبقى عالقًا في processing.
-    if (items.length > MAX_TOTAL_PER_RUN) {
-      const overflow = items.slice(MAX_TOTAL_PER_RUN);
-      items = items.slice(0, MAX_TOTAL_PER_RUN);
-      const overflowIds = overflow.map((it) => it.id);
-      await supabase
-        .from("bulk_upload_queue")
-        .update({ status: "pending", started_at: null })
-        .in("id", overflowIds);
-      console.log(`[Queue] ↩️ أُعيد ${overflow.length} كتاب إلى pending (تجاوز السقف الإجمالي ${MAX_TOTAL_PER_RUN})`);
-    }
-
-    if (items.length === 0) {
+    if (total.processed === 0) {
       return new Response(JSON.stringify({ success: true, processed: 0, message: "لا توجد عناصر معلّقة" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log(`[Queue] ⚙️ معالجة ${items.length} كتاب من الطابور`);
-
-    // 2) قسّم العناصر إلى قطع صغيرة وأرسلها بالتوازي إلى دالة الرفع الذكية.
-    //    هذا يتجنّب طلب HTTP واحد ضخم كان يتسبب بـ timeout وفشل كل الكتب معًا.
-    const chunks: QueueItem[][] = [];
-    for (let i = 0; i < items.length; i += AI_CHUNK_SIZE) {
-      chunks.push(items.slice(i, i + AI_CHUNK_SIZE));
-    }
-
-    const chunkResponses = await Promise.allSettled(
-      chunks.map((chunk) =>
-        fetch(`${supabaseUrl}/functions/v1/bulk-upload-books-ai`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${serviceKey}`,
-          },
-          body: JSON.stringify({
-            books: chunk.map((item) => ({
-              title: item.title,
-              book_file_url: item.book_file_url,
-              cover_image_url: item.cover_image_url ?? undefined,
-              user_email: item.created_by_email ?? "queue@kotobi.local",
-            })),
-          }),
-        })
-          .then(async (res) => {
-            let payload: any = {};
-            try { payload = await res.json(); } catch (_) {}
-            return { ok: res.ok, status: res.status, payload };
-          })
-          .catch((err) => ({
-            ok: false,
-            status: 0,
-            payload: { error: err instanceof Error ? err.message : "fetch_failed" },
-          })),
-      ),
-    );
-
-    // ادمج نتائج كل القطع وحاذيها مع items بالترتيب نفسه.
-    const results: BookResult[] = [];
-    chunks.forEach((chunk, idx) => {
-      const settled = chunkResponses[idx];
-      const resp = settled.status === "fulfilled"
-        ? settled.value
-        : { ok: false, status: 0, payload: { error: "chunk_rejected" } };
-      const chunkResults: BookResult[] = Array.isArray(resp.payload?.results)
-        ? resp.payload.results
-        : chunk.map((it) => ({
-            success: false,
-            retryable: !resp.ok,
-            title: it.title,
-            error: resp.payload?.error || `HTTP ${resp.status}`,
-          }));
-      results.push(...chunkResults);
-    });
-
-    // 3) حدّث حالة كل صف
-    const nowIso = new Date().toISOString();
-    let success = 0, failed = 0, requeued = 0, duplicates = 0;
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const result = results[i] || results.find((r) => r.title === item.title) || {
-        success: false,
-        retryable: true,
-        error: "no_result",
-      };
-
-      let nextStatus: string;
-      if (result.success) {
-        nextStatus = "success";
-        success++;
-      } else if (result.duplicate) {
-        nextStatus = "duplicate";
-        duplicates++;
-      } else if (result.retryable && item.attempts < item.max_attempts) {
-        nextStatus = "pending"; // أعِد للطابور
-        requeued++;
-      } else {
-        nextStatus = "failed";
-        failed++;
-      }
-
-      await supabase
-        .from("bulk_upload_queue")
-        .update({
-          status: nextStatus,
-          error: result.error ?? null,
-          result_book_id: result.id ?? null,
-          page_count: result.page_count ?? null,
-          finished_at: nextStatus === "pending" ? null : nowIso,
-          started_at: nextStatus === "pending" ? null : undefined,
-        })
-        .eq("id", item.id);
-    }
-
-    console.log(`[Queue] ✅ نجح ${success} • مكرر ${duplicates} • فشل ${failed} • أعيد ${requeued}`);
+    console.log(`[Queue] 🧾 الإجمالي: ${total.processed} كتاب • نجح ${total.success} • مكرر ${total.duplicates} • فشل ${total.failed} • أعيد ${total.requeued}`);
 
     return new Response(
       JSON.stringify({
         success: true,
-        processed: items.length,
-        summary: { success, failed, duplicates, requeued },
+        processed: total.processed,
+        summary: {
+          success: total.success,
+          failed: total.failed,
+          duplicates: total.duplicates,
+          requeued: total.requeued,
+        },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
