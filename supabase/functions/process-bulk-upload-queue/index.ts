@@ -10,10 +10,18 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// الحد الأقصى لعدد الكتب المسموح بمعالجتها بالتوازي **لكل دفعة (batch_label)**.
-// دالة claim_bulk_upload_items في قاعدة البيانات تطبّق هذا الحد لكل دفعة على حدة،
-// لذلك إذا وُجدت 3 دفعات نشطة فقد يتم سحب حتى 30 كتاب في تشغيل واحد (10 لكل دفعة).
-const PER_BATCH_LIMIT = 10;
+// الحد الأقصى لعدد الكتب المسحوبة من **كل دفعة (batch_label)** في التشغيل الواحد.
+// مخفّض إلى 3 لتفادي تكدّس الطلبات على Mistral / AI Gateway.
+const PER_BATCH_LIMIT = 3;
+
+// سقف صارم على إجمالي الكتب المعالَجة لكل تشغيل cron مهما تعدّدت الدفعات النشطة.
+// يمنع سحب 30+ كتاب دفعة واحدة عند وجود عدة batch_labels، وهو السبب الرئيسي للفشل الجماعي.
+const MAX_TOTAL_PER_RUN = 6;
+
+// حجم القطعة المُرسَلة في كل استدعاء HTTP لـ bulk-upload-books-ai.
+// نقسّم الكتب المسحوبة إلى قطع صغيرة ونرسلها بالتوازي، بدل طلب HTTP واحد ضخم
+// كان يتجاوز timeout الـ Edge Function (≈150s) ويفشل كل الكتب دفعة واحدة.
+const AI_CHUNK_SIZE = 2;
 
 interface QueueItem {
   id: string;
@@ -55,7 +63,20 @@ serve(async (req) => {
       });
     }
 
-    const items = (claimed || []) as QueueItem[];
+    let items = (claimed || []) as QueueItem[];
+
+    // طبّق السقف الإجمالي وأعِد الفائض إلى pending فورًا حتى لا يبقى عالقًا في processing.
+    if (items.length > MAX_TOTAL_PER_RUN) {
+      const overflow = items.slice(MAX_TOTAL_PER_RUN);
+      items = items.slice(0, MAX_TOTAL_PER_RUN);
+      const overflowIds = overflow.map((it) => it.id);
+      await supabase
+        .from("bulk_upload_queue")
+        .update({ status: "pending", started_at: null })
+        .in("id", overflowIds);
+      console.log(`[Queue] ↩️ أُعيد ${overflow.length} كتاب إلى pending (تجاوز السقف الإجمالي ${MAX_TOTAL_PER_RUN})`);
+    }
+
     if (items.length === 0) {
       return new Response(JSON.stringify({ success: true, processed: 0, message: "لا توجد عناصر معلّقة" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -64,31 +85,60 @@ serve(async (req) => {
 
     console.log(`[Queue] ⚙️ معالجة ${items.length} كتاب من الطابور`);
 
-    // 2) استدعِ دالة الرفع الذكية
-    const aiResponse = await fetch(`${supabaseUrl}/functions/v1/bulk-upload-books-ai`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${serviceKey}`,
-      },
-      body: JSON.stringify({
-        books: items.map((item) => ({
-          title: item.title,
-          book_file_url: item.book_file_url,
-          cover_image_url: item.cover_image_url ?? undefined,
-          user_email: item.created_by_email ?? "queue@kotobi.local",
-        })),
-      }),
-    });
-
-    let aiPayload: any = {};
-    try {
-      aiPayload = await aiResponse.json();
-    } catch (_) {
-      aiPayload = {};
+    // 2) قسّم العناصر إلى قطع صغيرة وأرسلها بالتوازي إلى دالة الرفع الذكية.
+    //    هذا يتجنّب طلب HTTP واحد ضخم كان يتسبب بـ timeout وفشل كل الكتب معًا.
+    const chunks: QueueItem[][] = [];
+    for (let i = 0; i < items.length; i += AI_CHUNK_SIZE) {
+      chunks.push(items.slice(i, i + AI_CHUNK_SIZE));
     }
 
-    const results: BookResult[] = Array.isArray(aiPayload?.results) ? aiPayload.results : [];
+    const chunkResponses = await Promise.allSettled(
+      chunks.map((chunk) =>
+        fetch(`${supabaseUrl}/functions/v1/bulk-upload-books-ai`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${serviceKey}`,
+          },
+          body: JSON.stringify({
+            books: chunk.map((item) => ({
+              title: item.title,
+              book_file_url: item.book_file_url,
+              cover_image_url: item.cover_image_url ?? undefined,
+              user_email: item.created_by_email ?? "queue@kotobi.local",
+            })),
+          }),
+        })
+          .then(async (res) => {
+            let payload: any = {};
+            try { payload = await res.json(); } catch (_) {}
+            return { ok: res.ok, status: res.status, payload };
+          })
+          .catch((err) => ({
+            ok: false,
+            status: 0,
+            payload: { error: err instanceof Error ? err.message : "fetch_failed" },
+          })),
+      ),
+    );
+
+    // ادمج نتائج كل القطع وحاذيها مع items بالترتيب نفسه.
+    const results: BookResult[] = [];
+    chunks.forEach((chunk, idx) => {
+      const settled = chunkResponses[idx];
+      const resp = settled.status === "fulfilled"
+        ? settled.value
+        : { ok: false, status: 0, payload: { error: "chunk_rejected" } };
+      const chunkResults: BookResult[] = Array.isArray(resp.payload?.results)
+        ? resp.payload.results
+        : chunk.map((it) => ({
+            success: false,
+            retryable: !resp.ok,
+            title: it.title,
+            error: resp.payload?.error || `HTTP ${resp.status}`,
+          }));
+      results.push(...chunkResults);
+    });
 
     // 3) حدّث حالة كل صف
     const nowIso = new Date().toISOString();
@@ -98,8 +148,8 @@ serve(async (req) => {
       const item = items[i];
       const result = results[i] || results.find((r) => r.title === item.title) || {
         success: false,
-        retryable: !aiResponse.ok,
-        error: aiPayload?.error || `HTTP ${aiResponse.status}`,
+        retryable: true,
+        error: "no_result",
       };
 
       let nextStatus: string;
