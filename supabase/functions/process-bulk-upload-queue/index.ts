@@ -23,6 +23,11 @@ const MAX_TOTAL_PER_RUN = 6;
 // كان يتجاوز timeout الـ Edge Function (≈150s) ويفشل كل الكتب دفعة واحدة.
 const AI_CHUNK_SIZE = 2;
 
+// عند انتهاء أول مجموعة بسرعة، ابدأ مجموعات لاحقة تلقائياً داخل نفس التشغيل.
+// هذا يمنع توقف الطابور حتى الضغط على "تشغيل الآن"، مع إبقاء حد زمني آمن قبل timeout.
+const MAX_ROUNDS_PER_INVOCATION = 3;
+const MAX_INVOCATION_MS = 115_000;
+
 interface QueueItem {
   id: string;
   title: string;
@@ -42,6 +47,30 @@ interface BookResult {
   id?: string;
   page_count?: number | null;
 }
+
+interface QueueSummary {
+  processed: number;
+  success: number;
+  failed: number;
+  duplicates: number;
+  requeued: number;
+}
+
+const emptySummary = (): QueueSummary => ({
+  processed: 0,
+  success: 0,
+  failed: 0,
+  duplicates: 0,
+  requeued: 0,
+});
+
+const addSummary = (target: QueueSummary, part: QueueSummary) => {
+  target.processed += part.processed;
+  target.success += part.success;
+  target.failed += part.failed;
+  target.duplicates += part.duplicates;
+  target.requeued += part.requeued;
+};
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
