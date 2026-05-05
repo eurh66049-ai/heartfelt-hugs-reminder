@@ -133,6 +133,44 @@ export default async function handler(request: Request, context: any) {
       }
     }
 
+    // جلب صفحات المستخدمين العاديين
+    offset = 0;
+    let hasMoreUsers = true;
+
+    while (hasMoreUsers) {
+      try {
+        const usersRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/profiles?select=id,username,created_at,last_seen&order=created_at.desc&offset=${offset}&limit=${limit}`,
+          { headers },
+        );
+
+        if (usersRes.ok) {
+          const users = await usersRes.json();
+          console.log(`Fetched ${users.length} users at offset ${offset}`);
+
+          for (const user of users) {
+            const identifier = (user.username && user.username.trim() !== "") ? user.username : user.id;
+            const userUrl = `https://kotobi.xyz/user/${encodePathSegment(identifier)}`;
+            addUrl({
+              url: userUrl,
+              lastmod: user.last_seen || user.created_at || new Date().toISOString(),
+              changefreq: "weekly",
+              priority: 0.6,
+            });
+          }
+
+          hasMoreUsers = users.length === limit;
+          offset += limit;
+        } else {
+          console.error("Error fetching users:", await usersRes.text());
+          hasMoreUsers = false;
+        }
+      } catch (e) {
+        console.error("Error fetching users for sitemap:", e);
+        hasMoreUsers = false;
+      }
+    }
+
     // جلب التصنيفات
     try {
       let catOffset = 0;
