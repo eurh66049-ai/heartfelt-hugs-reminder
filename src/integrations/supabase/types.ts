@@ -3010,6 +3010,42 @@ export type Database = {
         }
         Relationships: []
       }
+      text_extraction_queue: {
+        Row: {
+          attempts: number
+          book_id: string
+          created_at: string
+          finished_at: string | null
+          id: string
+          last_error: string | null
+          started_at: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          book_id: string
+          created_at?: string
+          finished_at?: string | null
+          id?: string
+          last_error?: string | null
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          book_id?: string
+          created_at?: string
+          finished_at?: string | null
+          id?: string
+          last_error?: string | null
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       tools_used: {
         Row: {
           created_at: string | null
@@ -3962,6 +3998,14 @@ export type Database = {
           isOneToOne: false
           isSetofReturn: true
         }
+      }
+      claim_text_extraction_items: {
+        Args: { p_limit?: number }
+        Returns: {
+          attempts: number
+          book_id: string
+          id: string
+        }[]
       }
       clean_duplicate_books: { Args: never; Returns: number }
       clean_duplicate_notifications: { Args: never; Returns: number }
