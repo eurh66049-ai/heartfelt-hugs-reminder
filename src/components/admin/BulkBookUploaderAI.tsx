@@ -78,7 +78,7 @@ function parseFreeformList(input: string): SimpleBook[] {
       const url = urlMatch[1].trim();
       // تنظيف العنوان من " - kotobi" في النهاية
       const cleanTitle = pendingTitle
-        .replace(/\s*-\s*kotobi(_text)?\s*$/i, '')
+        .replace(/\s*-\s*kotobi\s*$/i, '')
         .trim();
       items.push({ title: cleanTitle, book_file_url: url });
       pendingTitle = '';
