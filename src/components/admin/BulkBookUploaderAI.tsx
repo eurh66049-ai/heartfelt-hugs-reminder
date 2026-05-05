@@ -123,16 +123,14 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
             book_file_url: (r.book_file_url || '').trim(),
           }))
           .filter((r) => r.title && r.book_file_url);
-        const { books: deduped, removed } = dedupeBooks(rows);
-        const limited = deduped.slice(0, MAX_BOOKS_PER_RUN);
+        const limited = rows.slice(0, MAX_BOOKS_PER_RUN);
         setBooks(limited);
         toast({
           title: 'تم تحميل الملف',
           description:
-            `${deduped.length} كتاب فريد` +
-            (removed > 0 ? ` (تم تجاهل ${removed} مكرر)` : '') +
-            (deduped.length > MAX_BOOKS_PER_RUN ? ` — سيتم رفع أول ${MAX_BOOKS_PER_RUN} فقط` : ''),
-          variant: deduped.length > MAX_BOOKS_PER_RUN ? 'destructive' : undefined,
+            `${rows.length} كتاب جاهز` +
+            (rows.length > MAX_BOOKS_PER_RUN ? ` — سيتم رفع أول ${MAX_BOOKS_PER_RUN} فقط` : ''),
+          variant: rows.length > MAX_BOOKS_PER_RUN ? 'destructive' : undefined,
         });
       },
       error: (err) => {
@@ -147,12 +145,11 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
       toast({ title: 'لم يتم التعرف على أي كتاب', description: 'تأكد أن كل عنوان متبوع برابط PDF', variant: 'destructive' });
       return;
     }
-    const { books: deduped, removed } = dedupeBooks(parsed);
-    const limited = deduped.slice(0, MAX_BOOKS_PER_RUN);
+    const limited = parsed.slice(0, MAX_BOOKS_PER_RUN);
     setBooks(limited);
     toast({
       title: 'تم استخراج الكتب',
-      description: `${deduped.length} كتاب فريد${removed > 0 ? ` (تم تجاهل ${removed} مكرر)` : ''}`,
+      description: `${parsed.length} كتاب جاهز للرفع`,
     });
   };
 
@@ -174,9 +171,8 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
       toast({ title: 'لا توجد بيانات', description: 'املأ صفًا واحدًا على الأقل', variant: 'destructive' });
       return;
     }
-    const { books: deduped } = dedupeBooks(valid);
-    setBooks(deduped);
-    toast({ title: 'تم تجهيز الكتب', description: `${deduped.length} كتاب جاهز للرفع` });
+    setBooks(valid);
+    toast({ title: 'تم تجهيز الكتب', description: `${valid.length} كتاب جاهز للرفع` });
   };
 
   const uploadBatch = async (batch: SimpleBook[]): Promise<UploadBatchResult> => {
