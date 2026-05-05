@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
-import { Loader2, FileText, Search, CheckCircle, XCircle, RefreshCw, Eye, Play, Pause, Square, Zap } from 'lucide-react';
+import { Loader2, FileText, Search, CheckCircle, XCircle, RefreshCw, Eye, Play, Pause, Square, Zap, Server } from 'lucide-react';
 import { supabase, supabaseFunctions } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -36,6 +36,32 @@ const TextExtractionManager: React.FC = () => {
   const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0, failed: 0, currentTitle: '' });
   const bulkStateRef = useRef<BulkState>('idle');
   const { toast } = useToast();
+
+  // حالة الطابور الخلفي (يعمل عبر cron حتى عند إغلاق الموقع)
+  const [queueStats, setQueueStats] = useState<{ pending: number; processing: number; completed: number; failed: number } | null>(null);
+
+  const fetchQueueStats = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('text_extraction_queue' as any)
+        .select('status');
+      if (error) throw error;
+      const stats = { pending: 0, processing: 0, completed: 0, failed: 0 };
+      for (const row of (data as any[]) || []) {
+        const s = row.status as keyof typeof stats;
+        if (s in stats) stats[s]++;
+      }
+      setQueueStats(stats);
+    } catch (err) {
+      console.error('queue stats error', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchQueueStats();
+    const id = setInterval(fetchQueueStats, 15000);
+    return () => clearInterval(id);
+  }, [fetchQueueStats]);
 
   const fetchBooks = async () => {
     setLoading(true);
@@ -360,6 +386,64 @@ const TextExtractionManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* لوحة الطابور الخلفي - يعمل تلقائياً حتى عند إغلاق الموقع */}
+      <Card className="border-emerald-500/30 bg-emerald-500/5">
+        <CardContent className="p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="font-bold text-base flex items-center gap-2">
+                <Server className="h-5 w-5 text-emerald-600" />
+                الاستخراج التلقائي في الخلفية
+              </h3>
+              <p className="text-xs text-muted-foreground mt-1">
+                يعمل تلقائياً كل دقيقتين عبر السيرفر — يستمر حتى لو أغلقت الموقع
+              </p>
+            </div>
+            <Button onClick={fetchQueueStats} variant="outline" size="sm">
+              <RefreshCw className="h-4 w-4 ml-1" />
+              تحديث
+            </Button>
+          </div>
+          {queueStats ? (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div className="rounded border bg-background p-2">
+                  <div className="text-muted-foreground">في الانتظار</div>
+                  <div className="text-lg font-bold text-yellow-600">{queueStats.pending.toLocaleString()}</div>
+                </div>
+                <div className="rounded border bg-background p-2">
+                  <div className="text-muted-foreground">قيد المعالجة</div>
+                  <div className="text-lg font-bold text-blue-600">{queueStats.processing.toLocaleString()}</div>
+                </div>
+                <div className="rounded border bg-background p-2">
+                  <div className="text-muted-foreground">مكتمل</div>
+                  <div className="text-lg font-bold text-emerald-600">{queueStats.completed.toLocaleString()}</div>
+                </div>
+                <div className="rounded border bg-background p-2">
+                  <div className="text-muted-foreground">فشل</div>
+                  <div className="text-lg font-bold text-red-600">{queueStats.failed.toLocaleString()}</div>
+                </div>
+              </div>
+              {(() => {
+                const total = queueStats.pending + queueStats.processing + queueStats.completed + queueStats.failed;
+                const done = queueStats.completed + queueStats.failed;
+                const pct = total > 0 ? (done / total) * 100 : 0;
+                return (
+                  <div className="space-y-1">
+                    <Progress value={pct} className="h-2" />
+                    <div className="text-xs text-muted-foreground text-center">
+                      {done.toLocaleString()} / {total.toLocaleString()} ({pct.toFixed(1)}%)
+                    </div>
+                  </div>
+                );
+              })()}
+            </>
+          ) : (
+            <div className="text-xs text-muted-foreground">جاري تحميل حالة الطابور...</div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* لوحة الاستخراج التلقائي */}
       <Card className="border-primary/30 bg-primary/5">
         <CardContent className="p-4 space-y-3">
