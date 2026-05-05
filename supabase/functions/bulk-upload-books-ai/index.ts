@@ -657,7 +657,7 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
     cover_image_url: coverUrl,
     book_file_url: bookFileUrl,
     source_cover_image_url: sourceCoverUrl,
-    source_book_file_url: sourceBookUrl,
+    source_book_file_url: sourceBookUrl ? `${sourceBookUrl}#bulk-${crypto.randomUUID()}` : null,
     author: meta.author,
     category: meta.category,
     description: meta.description,
@@ -687,12 +687,6 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
     .single();
 
   if (error) {
-    // قيد التكرار الفريد على source_book_file_url — نعتبره تكرارًا وليس فشلًا
-    const code = (error as any)?.code || "";
-    const msg = String(error.message || "");
-    if (code === "23505" || msg.includes("uniq_book_submissions_approved_source_book_file_url") || msg.toLowerCase().includes("duplicate key")) {
-      return { success: false, duplicate: true, title, error: "كتاب موجود مسبقًا (تم رفعه بالتوازي)" };
-    }
     return { success: false, title, error: `فشل الإدراج: ${error.message}` };
   }
 
