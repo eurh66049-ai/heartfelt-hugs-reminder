@@ -48,18 +48,16 @@ interface UploadBatchResult {
   retryAfterMs: number;
 }
 
-// تطبيع العنوان لكشف التكرار (إزالة _text، -kotobi، الامتدادات والمسافات)
+// تطبيع العنوان لكشف التكرار (إزالة -kotobi، الامتدادات والمسافات)
 const normalizeTitleKey = (s: string): string =>
   s
     .toLowerCase()
     .replace(/\.pdf$|\.docx?$/g, '')
-    .replace(/_text\b/g, '')
     .replace(/-?\s*kotobi\s*$/g, '')
     .replace(/[\s\-_]+/g, ' ')
     .trim();
 
-const normalizeUrlKey = (url: string): string =>
-  url.toLowerCase().replace(/_text(?=\.pdf)/g, '').trim();
+const normalizeUrlKey = (url: string): string => url.toLowerCase().trim();
 
 // تحليل النص الحر (قوائم مرقمة) إلى كتب
 function parseFreeformList(input: string): SimpleBook[] {
