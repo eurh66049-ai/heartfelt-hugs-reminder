@@ -184,7 +184,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     setBooks(limited);
     toast({
       title: 'تم استخراج الكتب',
-      description: `${deduped.length} كتاب فريد${removed > 0 ? ` (تم تجاهل ${removed} مكرر بما فيها _text)` : ''}`,
+      description: `${deduped.length} كتاب فريد${removed > 0 ? ` (تم تجاهل ${removed} مكرر)` : ''}`,
     });
   };
 
