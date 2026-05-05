@@ -637,7 +637,8 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
 
   const watermarkResult = await addWatermarkIfPossible(uploadedBook.url, uploadedBook.extension);
   const bookFileUrl = watermarkResult.url;
-  const slug = generateSlug(title, meta.author);
+  const baseSlug = generateSlug(title, meta.author);
+  const slug = baseSlug ? `${baseSlug}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` : undefined;
 
   // عدد صفحات الكتاب: نفس ميزة "انشر كتابك" فقط — القيمة الراجعة من add-pdf-watermark.
   // عدد الصفحات: نفضّل ما يرجعه add-pdf-watermark، ثم نسقط على ما حسبناه محليًا من PDF.
@@ -678,27 +679,6 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
     reviewer_notes: "تم نشره مباشرة بواسطة الرفع المجمع 2 عبر Mistral AI",
     ...(slug ? { slug } : {}),
   };
-
-  if (existing) {
-    const { data: updated, error } = await supabaseClient
-      .from("book_submissions")
-      .update(payload)
-      .eq("id", existing.id)
-      .select("id, title")
-      .single();
-
-    if (error) return { success: false, title, error: `فشل تحديث الكتاب: ${error.message}` };
-    return {
-      success: true,
-      id: updated?.id,
-      title,
-      page_count: finalPageCount,
-      cover_image_url: coverUrl,
-      book_file_url: bookFileUrl,
-      cover_uploaded_to_supabase: true,
-      book_uploaded_to_supabase: true,
-    };
-  }
 
   const { data: inserted, error } = await supabaseClient
     .from("book_submissions")
