@@ -93,7 +93,6 @@ interface AIBookMeta {
 
 interface BookResult {
   success: boolean;
-  duplicate?: boolean;
   retryable?: boolean;
   error?: string;
   id?: string;
@@ -780,8 +779,7 @@ serve(async (req) => {
         summary: {
           total: results.length,
           success: results.filter((r) => r.success).length,
-          failed: results.filter((r) => !r.success && !r.duplicate).length,
-          duplicates: results.filter((r) => r.duplicate).length,
+          failed: results.filter((r) => !r.success).length,
         },
         results,
       });
@@ -814,8 +812,7 @@ serve(async (req) => {
     const summary = {
       total: results.length,
       success: results.filter((r) => r.success).length,
-      failed: results.filter((r) => !r.success && !r.duplicate).length,
-      duplicates: results.filter((r) => r.duplicate).length,
+      failed: results.filter((r) => !r.success).length,
       retryable: results.filter((r) => r.retryable).length,
     };
 
