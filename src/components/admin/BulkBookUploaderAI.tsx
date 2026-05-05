@@ -484,7 +484,6 @@ https://archive.org/download/.../روائع من التاريخ العثماني
                   </div>
                   <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
                     <span>✅ نجح: <strong className="text-foreground">{results.success}</strong></span>
-                    <span>♻️ مكرر: <strong className="text-foreground">{results.duplicates}</strong></span>
                     <span>❌ فشل: <strong className="text-foreground">{results.failed}</strong></span>
                     <span>⏳ متبقي: <strong className="text-foreground">{Math.max(books.length - totalProcessed, 0)}</strong></span>
                   </div>
@@ -503,16 +502,11 @@ https://archive.org/download/.../روائع من التاريخ العثماني
             )}
 
             {totalProcessed > 0 && (
-              <div className="grid grid-cols-3 gap-3 pt-2">
+              <div className="grid grid-cols-2 gap-3 pt-2">
                 <div className="rounded-lg border p-3 text-center">
                   <CheckCircle className="h-5 w-5 mx-auto text-green-600 mb-1" />
                   <div className="text-2xl font-bold">{results.success}</div>
                   <div className="text-xs text-muted-foreground">نجح</div>
-                </div>
-                <div className="rounded-lg border p-3 text-center">
-                  <AlertTriangle className="h-5 w-5 mx-auto text-amber-600 mb-1" />
-                  <div className="text-2xl font-bold">{results.duplicates}</div>
-                  <div className="text-xs text-muted-foreground">مكرر</div>
                 </div>
                 <div className="rounded-lg border p-3 text-center">
                   <X className="h-5 w-5 mx-auto text-red-600 mb-1" />
