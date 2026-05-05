@@ -36,7 +36,6 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface UploadBookResult {
   success?: boolean;
-  duplicate?: boolean;
   retryable?: boolean;
   error?: string;
   title?: string;
@@ -47,17 +46,6 @@ interface UploadBatchResult {
   results: UploadBookResult[];
   retryAfterMs: number;
 }
-
-// تطبيع العنوان لكشف التكرار (إزالة -kotobi، الامتدادات والمسافات)
-const normalizeTitleKey = (s: string): string =>
-  s
-    .toLowerCase()
-    .replace(/\.pdf$|\.docx?$/g, '')
-    .replace(/-?\s*kotobi\s*$/g, '')
-    .replace(/[\s\-_]+/g, ' ')
-    .trim();
-
-const normalizeUrlKey = (url: string): string => url.toLowerCase().trim();
 
 // تحليل النص الحر (قوائم مرقمة) إلى كتب
 function parseFreeformList(input: string): SimpleBook[] {
@@ -90,27 +78,6 @@ function parseFreeformList(input: string): SimpleBook[] {
 
   return items;
 }
-
-// إزالة المكررات (بما فيها _text)
-function dedupeBooks(rows: SimpleBook[]): { books: SimpleBook[]; removed: number } {
-  const seen = new Set<string>();
-  const out: SimpleBook[] = [];
-  let removed = 0;
-  for (const r of rows) {
-    const titleKey = normalizeTitleKey(r.title);
-    const urlKey = normalizeUrlKey(r.book_file_url);
-    const key = `${titleKey}|${urlKey}`;
-    if (seen.has(key) || seen.has(titleKey)) {
-      removed++;
-      continue;
-    }
-    seen.add(key);
-    seen.add(titleKey);
-    out.push(r);
-  }
-  return { books: out, removed };
-}
-
 const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplete }) => {
   const [books, setBooks] = useState<SimpleBook[]>([]);
   const [pasteText, setPasteText] = useState('');
@@ -122,7 +89,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
   const [currentIndex, setCurrentIndex] = useState(0);
   const [currentTitle, setCurrentTitle] = useState('');
   const [activeBookProgress, setActiveBookProgress] = useState(0);
-  const [results, setResults] = useState({ success: 0, failed: 0, duplicates: 0, errors: [] as string[] });
+  const [results, setResults] = useState({ success: 0, failed: 0, errors: [] as string[] });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pauseRef = useRef(false);
   const cancelRef = useRef(false);
@@ -155,16 +122,14 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
             book_file_url: (r.book_file_url || '').trim(),
           }))
           .filter((r) => r.title && r.book_file_url);
-        const { books: deduped, removed } = dedupeBooks(rows);
-        const limited = deduped.slice(0, MAX_BOOKS_PER_RUN);
+        const limited = rows.slice(0, MAX_BOOKS_PER_RUN);
         setBooks(limited);
         toast({
           title: 'تم تحميل الملف',
           description:
-            `${deduped.length} كتاب فريد` +
-            (removed > 0 ? ` (تم تجاهل ${removed} مكرر)` : '') +
-            (deduped.length > MAX_BOOKS_PER_RUN ? ` — سيتم رفع أول ${MAX_BOOKS_PER_RUN} فقط` : ''),
-          variant: deduped.length > MAX_BOOKS_PER_RUN ? 'destructive' : undefined,
+            `${rows.length} كتاب جاهز` +
+            (rows.length > MAX_BOOKS_PER_RUN ? ` — سيتم رفع أول ${MAX_BOOKS_PER_RUN} فقط` : ''),
+          variant: rows.length > MAX_BOOKS_PER_RUN ? 'destructive' : undefined,
         });
       },
       error: (err) => {
@@ -179,12 +144,11 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
       toast({ title: 'لم يتم التعرف على أي كتاب', description: 'تأكد أن كل عنوان متبوع برابط PDF', variant: 'destructive' });
       return;
     }
-    const { books: deduped, removed } = dedupeBooks(parsed);
-    const limited = deduped.slice(0, MAX_BOOKS_PER_RUN);
+    const limited = parsed.slice(0, MAX_BOOKS_PER_RUN);
     setBooks(limited);
     toast({
       title: 'تم استخراج الكتب',
-      description: `${deduped.length} كتاب فريد${removed > 0 ? ` (تم تجاهل ${removed} مكرر)` : ''}`,
+      description: `${parsed.length} كتاب جاهز للرفع`,
     });
   };
 
@@ -206,9 +170,8 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
       toast({ title: 'لا توجد بيانات', description: 'املأ صفًا واحدًا على الأقل', variant: 'destructive' });
       return;
     }
-    const { books: deduped } = dedupeBooks(valid);
-    setBooks(deduped);
-    toast({ title: 'تم تجهيز الكتب', description: `${deduped.length} كتاب جاهز للرفع` });
+    setBooks(valid);
+    toast({ title: 'تم تجهيز الكتب', description: `${valid.length} كتاب جاهز للرفع` });
   };
 
   const uploadBatch = async (batch: SimpleBook[]): Promise<UploadBatchResult> => {
@@ -264,9 +227,9 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     cancelRef.current = false;
     setCurrentIndex(0);
     setActiveBookProgress(0);
-    setResults({ success: 0, failed: 0, duplicates: 0, errors: [] });
+    setResults({ success: 0, failed: 0, errors: [] });
 
-    const localResults = { success: 0, failed: 0, duplicates: 0, errors: [] as string[] };
+    const localResults = { success: 0, failed: 0, errors: [] as string[] };
     let pending = books;
     let attempt = 0;
     let processed = 0;
@@ -315,9 +278,6 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
           if (result.success) {
             localResults.success += 1;
             processed += 1;
-          } else if (result.duplicate) {
-            localResults.duplicates += 1;
-            processed += 1;
           } else if (result.retryable && attempt < 4) {
             retryableBooks.push(book);
           } else {
@@ -355,7 +315,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     onUploadComplete();
     toast({
       title: cancelRef.current ? 'تم الإيقاف' : 'اكتمل الرفع',
-      description: `نجح ${localResults.success} • مكرر ${localResults.duplicates} • فشل ${localResults.failed}`,
+      description: `نجح ${localResults.success} • فشل ${localResults.failed}`,
     });
   };
 
@@ -370,7 +330,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     setPaused(false);
   };
 
-  const totalProcessed = results.success + results.failed + results.duplicates;
+  const totalProcessed = results.success + results.failed;
   const progress = books.length > 0
     ? Math.min(100, ((totalProcessed + (uploading ? activeBookProgress / 100 : 0)) / books.length) * 100)
     : 0;
@@ -524,7 +484,6 @@ https://archive.org/download/.../روائع من التاريخ العثماني
                   </div>
                   <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
                     <span>✅ نجح: <strong className="text-foreground">{results.success}</strong></span>
-                    <span>♻️ مكرر: <strong className="text-foreground">{results.duplicates}</strong></span>
                     <span>❌ فشل: <strong className="text-foreground">{results.failed}</strong></span>
                     <span>⏳ متبقي: <strong className="text-foreground">{Math.max(books.length - totalProcessed, 0)}</strong></span>
                   </div>
@@ -543,16 +502,11 @@ https://archive.org/download/.../روائع من التاريخ العثماني
             )}
 
             {totalProcessed > 0 && (
-              <div className="grid grid-cols-3 gap-3 pt-2">
+              <div className="grid grid-cols-2 gap-3 pt-2">
                 <div className="rounded-lg border p-3 text-center">
                   <CheckCircle className="h-5 w-5 mx-auto text-green-600 mb-1" />
                   <div className="text-2xl font-bold">{results.success}</div>
                   <div className="text-xs text-muted-foreground">نجح</div>
-                </div>
-                <div className="rounded-lg border p-3 text-center">
-                  <AlertTriangle className="h-5 w-5 mx-auto text-amber-600 mb-1" />
-                  <div className="text-2xl font-bold">{results.duplicates}</div>
-                  <div className="text-xs text-muted-foreground">مكرر</div>
                 </div>
                 <div className="rounded-lg border p-3 text-center">
                   <X className="h-5 w-5 mx-auto text-red-600 mb-1" />

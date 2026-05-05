@@ -93,7 +93,6 @@ interface AIBookMeta {
 
 interface BookResult {
   success: boolean;
-  duplicate?: boolean;
   retryable?: boolean;
   error?: string;
   id?: string;
@@ -609,35 +608,7 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
   const sourceCoverUrl = book.cover_image_url?.trim() || "";
   console.log(`[AI Bulk] معالجة: ${title}`);
 
-  // 1) كشف مبكر للتكرار اعتمادًا على رابط الملف الأصلي (الأكثر دقة)
-  const { data: existingBySource } = await supabaseClient
-    .from("book_submissions")
-    .select("id, title, book_file_url, cover_image_url")
-    .eq("status", "approved")
-    .eq("source_book_file_url", sourceBookUrl)
-    .maybeSingle();
-
-  if (existingBySource) {
-    return { success: false, duplicate: true, title, error: "كتاب موجود مسبقًا (نفس رابط المصدر)" };
-  }
-
-  // 2) كشف ثانوي بالعنوان (بعد التطبيع)
-  const { data: existing } = await supabaseClient
-    .from("book_submissions")
-    .select("id, title, book_file_url, cover_image_url")
-    .eq("title", title)
-    .eq("status", "approved")
-    .maybeSingle();
-
-  if (existing) {
-    const needsRepair =
-      !String(existing.book_file_url || "").includes("/storage/v1/object/public/book-files/") ||
-      !String(existing.cover_image_url || "").includes("/storage/v1/object/public/book-covers/");
-
-    if (!needsRepair) {
-      return { success: false, duplicate: true, title, error: "كتاب موجود مسبقًا" };
-    }
-  }
+  // لا نتحقق من التكرار هنا: كل صف يرسله المدير يجب رفعه ككتاب مستقل.
 
   // إذا تم تمرير رابط غلاف، نحاول استخدامه. وإلا نولّده من الصفحة الأولى للـ PDF.
   const [providedCoverUrl, uploadedBook] = await Promise.all([
@@ -665,7 +636,8 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
 
   const watermarkResult = await addWatermarkIfPossible(uploadedBook.url, uploadedBook.extension);
   const bookFileUrl = watermarkResult.url;
-  const slug = existing ? undefined : generateSlug(title, meta.author);
+  const baseSlug = generateSlug(title, meta.author);
+  const slug = baseSlug ? `${baseSlug}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` : undefined;
 
   // عدد صفحات الكتاب: نفس ميزة "انشر كتابك" فقط — القيمة الراجعة من add-pdf-watermark.
   // عدد الصفحات: نفضّل ما يرجعه add-pdf-watermark، ثم نسقط على ما حسبناه محليًا من PDF.
@@ -684,7 +656,7 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
     cover_image_url: coverUrl,
     book_file_url: bookFileUrl,
     source_cover_image_url: sourceCoverUrl,
-    source_book_file_url: sourceBookUrl,
+    source_book_file_url: sourceBookUrl ? `${sourceBookUrl}#bulk-${crypto.randomUUID()}` : null,
     author: meta.author,
     category: meta.category,
     description: meta.description,
@@ -707,27 +679,6 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
     ...(slug ? { slug } : {}),
   };
 
-  if (existing) {
-    const { data: updated, error } = await supabaseClient
-      .from("book_submissions")
-      .update(payload)
-      .eq("id", existing.id)
-      .select("id, title")
-      .single();
-
-    if (error) return { success: false, title, error: `فشل تحديث الكتاب: ${error.message}` };
-    return {
-      success: true,
-      id: updated?.id,
-      title,
-      page_count: finalPageCount,
-      cover_image_url: coverUrl,
-      book_file_url: bookFileUrl,
-      cover_uploaded_to_supabase: true,
-      book_uploaded_to_supabase: true,
-    };
-  }
-
   const { data: inserted, error } = await supabaseClient
     .from("book_submissions")
     .insert(payload)
@@ -735,12 +686,6 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
     .single();
 
   if (error) {
-    // قيد التكرار الفريد على source_book_file_url — نعتبره تكرارًا وليس فشلًا
-    const code = (error as any)?.code || "";
-    const msg = String(error.message || "");
-    if (code === "23505" || msg.includes("uniq_book_submissions_approved_source_book_file_url") || msg.toLowerCase().includes("duplicate key")) {
-      return { success: false, duplicate: true, title, error: "كتاب موجود مسبقًا (تم رفعه بالتوازي)" };
-    }
     return { success: false, title, error: `فشل الإدراج: ${error.message}` };
   }
 
@@ -834,8 +779,7 @@ serve(async (req) => {
         summary: {
           total: results.length,
           success: results.filter((r) => r.success).length,
-          failed: results.filter((r) => !r.success && !r.duplicate).length,
-          duplicates: results.filter((r) => r.duplicate).length,
+          failed: results.filter((r) => !r.success).length,
         },
         results,
       });
@@ -868,8 +812,7 @@ serve(async (req) => {
     const summary = {
       total: results.length,
       success: results.filter((r) => r.success).length,
-      failed: results.filter((r) => !r.success && !r.duplicate).length,
-      duplicates: results.filter((r) => r.duplicate).length,
+      failed: results.filter((r) => !r.success).length,
       retryable: results.filter((r) => r.retryable).length,
     };
 
