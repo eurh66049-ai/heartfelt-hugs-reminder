@@ -48,18 +48,16 @@ interface UploadBatchResult {
   retryAfterMs: number;
 }
 
-// تطبيع العنوان لكشف التكرار (إزالة _text، -kotobi، الامتدادات والمسافات)
+// تطبيع العنوان لكشف التكرار (إزالة -kotobi، الامتدادات والمسافات)
 const normalizeTitleKey = (s: string): string =>
   s
     .toLowerCase()
     .replace(/\.pdf$|\.docx?$/g, '')
-    .replace(/_text\b/g, '')
     .replace(/-?\s*kotobi\s*$/g, '')
     .replace(/[\s\-_]+/g, ' ')
     .trim();
 
-const normalizeUrlKey = (url: string): string =>
-  url.toLowerCase().replace(/_text(?=\.pdf)/g, '').trim();
+const normalizeUrlKey = (url: string): string => url.toLowerCase().trim();
 
 // تحليل النص الحر (قوائم مرقمة) إلى كتب
 function parseFreeformList(input: string): SimpleBook[] {
@@ -80,7 +78,7 @@ function parseFreeformList(input: string): SimpleBook[] {
       const url = urlMatch[1].trim();
       // تنظيف العنوان من " - kotobi" في النهاية
       const cleanTitle = pendingTitle
-        .replace(/\s*-\s*kotobi(_text)?\s*$/i, '')
+        .replace(/\s*-\s*kotobi\s*$/i, '')
         .trim();
       items.push({ title: cleanTitle, book_file_url: url });
       pendingTitle = '';
@@ -164,7 +162,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
           title: 'تم تحميل الملف',
           description:
             `${deduped.length} كتاب فريد` +
-            (removed > 0 ? ` (تم تجاهل ${removed} مكرر بما فيها _text)` : '') +
+            (removed > 0 ? ` (تم تجاهل ${removed} مكرر)` : '') +
             (deduped.length > MAX_BOOKS_PER_RUN ? ` — سيتم رفع أول ${MAX_BOOKS_PER_RUN} فقط` : ''),
           variant: deduped.length > MAX_BOOKS_PER_RUN ? 'destructive' : undefined,
         });
@@ -186,7 +184,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     setBooks(limited);
     toast({
       title: 'تم استخراج الكتب',
-      description: `${deduped.length} كتاب فريد${removed > 0 ? ` (تم تجاهل ${removed} مكرر بما فيها _text)` : ''}`,
+      description: `${deduped.length} كتاب فريد${removed > 0 ? ` (تم تجاهل ${removed} مكرر)` : ''}`,
     });
   };
 
@@ -393,7 +391,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
               ارفع ملف CSV يحتوي على حقلين فقط: <strong>title</strong> و{' '}
               <strong>book_file_url</strong>. <strong>الغلاف يُولَّد تلقائيًا من الصفحة الأولى للـPDF</strong>.
               الذكاء الاصطناعي يستنتج المؤلف، التصنيف، الوصف، اللغة وسنة النشر تلقائيًا. عدد الصفحات
-              يُحسب فعليًا من ملف PDF. يتم تجاهل أي ملف مكرر بما فيها نسخة <code>_text</code>.
+              يُحسب فعليًا من ملف PDF.
               يمكنك رفع حتى <strong>{MAX_BOOKS_PER_RUN}</strong> كتاب دفعة واحدة.
             </AlertDescription>
           </Alert>
