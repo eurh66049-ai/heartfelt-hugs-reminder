@@ -48,17 +48,6 @@ interface UploadBatchResult {
   retryAfterMs: number;
 }
 
-// تطبيع العنوان لكشف التكرار (إزالة -kotobi، الامتدادات والمسافات)
-const normalizeTitleKey = (s: string): string =>
-  s
-    .toLowerCase()
-    .replace(/\.pdf$|\.docx?$/g, '')
-    .replace(/-?\s*kotobi\s*$/g, '')
-    .replace(/[\s\-_]+/g, ' ')
-    .trim();
-
-const normalizeUrlKey = (url: string): string => url.toLowerCase().trim();
-
 // تحليل النص الحر (قوائم مرقمة) إلى كتب
 function parseFreeformList(input: string): SimpleBook[] {
   const lines = input.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -90,27 +79,6 @@ function parseFreeformList(input: string): SimpleBook[] {
 
   return items;
 }
-
-// إزالة المكررات (بما فيها _text)
-function dedupeBooks(rows: SimpleBook[]): { books: SimpleBook[]; removed: number } {
-  const seen = new Set<string>();
-  const out: SimpleBook[] = [];
-  let removed = 0;
-  for (const r of rows) {
-    const titleKey = normalizeTitleKey(r.title);
-    const urlKey = normalizeUrlKey(r.book_file_url);
-    const key = `${titleKey}|${urlKey}`;
-    if (seen.has(key) || seen.has(titleKey)) {
-      removed++;
-      continue;
-    }
-    seen.add(key);
-    seen.add(titleKey);
-    out.push(r);
-  }
-  return { books: out, removed };
-}
-
 const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplete }) => {
   const [books, setBooks] = useState<SimpleBook[]>([]);
   const [pasteText, setPasteText] = useState('');
