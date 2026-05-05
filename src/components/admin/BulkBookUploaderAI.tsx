@@ -36,7 +36,6 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface UploadBookResult {
   success?: boolean;
-  duplicate?: boolean;
   retryable?: boolean;
   error?: string;
   title?: string;
@@ -90,7 +89,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
   const [currentIndex, setCurrentIndex] = useState(0);
   const [currentTitle, setCurrentTitle] = useState('');
   const [activeBookProgress, setActiveBookProgress] = useState(0);
-  const [results, setResults] = useState({ success: 0, failed: 0, duplicates: 0, errors: [] as string[] });
+  const [results, setResults] = useState({ success: 0, failed: 0, errors: [] as string[] });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pauseRef = useRef(false);
   const cancelRef = useRef(false);
@@ -228,9 +227,9 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     cancelRef.current = false;
     setCurrentIndex(0);
     setActiveBookProgress(0);
-    setResults({ success: 0, failed: 0, duplicates: 0, errors: [] });
+    setResults({ success: 0, failed: 0, errors: [] });
 
-    const localResults = { success: 0, failed: 0, duplicates: 0, errors: [] as string[] };
+    const localResults = { success: 0, failed: 0, errors: [] as string[] };
     let pending = books;
     let attempt = 0;
     let processed = 0;
@@ -279,9 +278,6 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
           if (result.success) {
             localResults.success += 1;
             processed += 1;
-          } else if (result.duplicate) {
-            localResults.duplicates += 1;
-            processed += 1;
           } else if (result.retryable && attempt < 4) {
             retryableBooks.push(book);
           } else {
@@ -319,7 +315,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     onUploadComplete();
     toast({
       title: cancelRef.current ? 'تم الإيقاف' : 'اكتمل الرفع',
-      description: `نجح ${localResults.success} • مكرر ${localResults.duplicates} • فشل ${localResults.failed}`,
+      description: `نجح ${localResults.success} • فشل ${localResults.failed}`,
     });
   };
 
@@ -334,7 +330,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     setPaused(false);
   };
 
-  const totalProcessed = results.success + results.failed + results.duplicates;
+  const totalProcessed = results.success + results.failed;
   const progress = books.length > 0
     ? Math.min(100, ((totalProcessed + (uploading ? activeBookProgress / 100 : 0)) / books.length) * 100)
     : 0;
