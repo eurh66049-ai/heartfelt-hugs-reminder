@@ -162,7 +162,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
           title: 'تم تحميل الملف',
           description:
             `${deduped.length} كتاب فريد` +
-            (removed > 0 ? ` (تم تجاهل ${removed} مكرر بما فيها _text)` : '') +
+            (removed > 0 ? ` (تم تجاهل ${removed} مكرر)` : '') +
             (deduped.length > MAX_BOOKS_PER_RUN ? ` — سيتم رفع أول ${MAX_BOOKS_PER_RUN} فقط` : ''),
           variant: deduped.length > MAX_BOOKS_PER_RUN ? 'destructive' : undefined,
         });
