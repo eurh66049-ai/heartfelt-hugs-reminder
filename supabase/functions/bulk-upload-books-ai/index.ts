@@ -609,35 +609,7 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
   const sourceCoverUrl = book.cover_image_url?.trim() || "";
   console.log(`[AI Bulk] معالجة: ${title}`);
 
-  // 1) كشف مبكر للتكرار اعتمادًا على رابط الملف الأصلي (الأكثر دقة)
-  const { data: existingBySource } = await supabaseClient
-    .from("book_submissions")
-    .select("id, title, book_file_url, cover_image_url")
-    .eq("status", "approved")
-    .eq("source_book_file_url", sourceBookUrl)
-    .maybeSingle();
-
-  if (existingBySource) {
-    return { success: false, duplicate: true, title, error: "كتاب موجود مسبقًا (نفس رابط المصدر)" };
-  }
-
-  // 2) كشف ثانوي بالعنوان (بعد التطبيع)
-  const { data: existing } = await supabaseClient
-    .from("book_submissions")
-    .select("id, title, book_file_url, cover_image_url")
-    .eq("title", title)
-    .eq("status", "approved")
-    .maybeSingle();
-
-  if (existing) {
-    const needsRepair =
-      !String(existing.book_file_url || "").includes("/storage/v1/object/public/book-files/") ||
-      !String(existing.cover_image_url || "").includes("/storage/v1/object/public/book-covers/");
-
-    if (!needsRepair) {
-      return { success: false, duplicate: true, title, error: "كتاب موجود مسبقًا" };
-    }
-  }
+  // لا نتحقق من التكرار هنا: كل صف يرسله المدير يجب رفعه ككتاب مستقل.
 
   // إذا تم تمرير رابط غلاف، نحاول استخدامه. وإلا نولّده من الصفحة الأولى للـ PDF.
   const [providedCoverUrl, uploadedBook] = await Promise.all([
@@ -665,7 +637,7 @@ async function upsertApprovedBook(book: InputBook, meta: AIBookMeta, supabaseCli
 
   const watermarkResult = await addWatermarkIfPossible(uploadedBook.url, uploadedBook.extension);
   const bookFileUrl = watermarkResult.url;
-  const slug = existing ? undefined : generateSlug(title, meta.author);
+  const slug = generateSlug(title, meta.author);
 
   // عدد صفحات الكتاب: نفس ميزة "انشر كتابك" فقط — القيمة الراجعة من add-pdf-watermark.
   // عدد الصفحات: نفضّل ما يرجعه add-pdf-watermark، ثم نسقط على ما حسبناه محليًا من PDF.
