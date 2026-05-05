@@ -391,7 +391,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
               ارفع ملف CSV يحتوي على حقلين فقط: <strong>title</strong> و{' '}
               <strong>book_file_url</strong>. <strong>الغلاف يُولَّد تلقائيًا من الصفحة الأولى للـPDF</strong>.
               الذكاء الاصطناعي يستنتج المؤلف، التصنيف، الوصف، اللغة وسنة النشر تلقائيًا. عدد الصفحات
-              يُحسب فعليًا من ملف PDF. يتم تجاهل أي ملف مكرر بما فيها نسخة <code>_text</code>.
+              يُحسب فعليًا من ملف PDF.
               يمكنك رفع حتى <strong>{MAX_BOOKS_PER_RUN}</strong> كتاب دفعة واحدة.
             </AlertDescription>
           </Alert>
