@@ -95,6 +95,80 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
   const cancelRef = useRef(false);
   const { toast } = useToast();
 
+  // === استخراج روابط التحميل من صفحات archive.org عبر Mistral AI ===
+  const [pageLinksText, setPageLinksText] = useState('');
+  const [extracting, setExtracting] = useState(false);
+  const [extractProgress, setExtractProgress] = useState({ done: 0, total: 0 });
+
+  const extractFromArchivePages = async () => {
+    const urls = pageLinksText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => /^https?:\/\//i.test(l));
+
+    if (urls.length === 0) {
+      toast({ title: 'لا توجد روابط', description: 'ألصق روابط صفحات الكتب (سطر لكل رابط)', variant: 'destructive' });
+      return;
+    }
+
+    setExtracting(true);
+    setExtractProgress({ done: 0, total: urls.length });
+    const extracted: SimpleBook[] = [];
+    const errors: string[] = [];
+
+    try {
+      for (let i = 0; i < urls.length; i++) {
+        const pageUrl = urls[i];
+        try {
+          const { data, error } = await supabase.functions.invoke('extract-archive-book-link', {
+            body: { pageUrl },
+          });
+          if (error) throw new Error(error.message);
+          if (data?.success && data?.book_file_url) {
+            extracted.push({
+              title: (data.title || '').trim() || pageUrl,
+              book_file_url: data.book_file_url,
+            });
+          } else {
+            errors.push(`${pageUrl}: ${data?.error || 'لم يتم العثور على رابط PDF'}`);
+          }
+        } catch (e: any) {
+          errors.push(`${pageUrl}: ${e.message || 'فشل الاستخراج'}`);
+        }
+        setExtractProgress({ done: i + 1, total: urls.length });
+      }
+
+      if (extracted.length > 0) {
+        const limited = extracted.slice(0, MAX_BOOKS_PER_RUN);
+        setBooks((prev) => {
+          // دمج بدون تكرار حسب الرابط
+          const existing = new Set(prev.map((b) => b.book_file_url));
+          const merged = [...prev];
+          for (const b of limited) {
+            if (!existing.has(b.book_file_url)) {
+              merged.push(b);
+              existing.add(b.book_file_url);
+            }
+          }
+          return merged.slice(0, MAX_BOOKS_PER_RUN);
+        });
+      }
+
+      toast({
+        title: 'اكتمل الاستخراج',
+        description: `تم استخراج ${extracted.length} رابط PDF من ${urls.length} صفحة` + (errors.length ? ` • فشل ${errors.length}` : ''),
+        variant: errors.length && !extracted.length ? 'destructive' : undefined,
+      });
+
+      if (errors.length) {
+        console.warn('Extraction errors:', errors);
+      }
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+
   const downloadSample = () => {
     const blob = new Blob([SAMPLE_CSV], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
