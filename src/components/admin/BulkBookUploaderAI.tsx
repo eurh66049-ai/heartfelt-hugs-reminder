@@ -168,6 +168,98 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     }
   };
 
+  // === الاكتشاف التلقائي: بحث في archive.org → استخراج روابط PDF → إضافة ===
+  const [discoverQuery, setDiscoverQuery] = useState('');
+  const [discoverLimit, setDiscoverLimit] = useState(30);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverProgress, setDiscoverProgress] = useState({ phase: '', done: 0, total: 0 });
+
+  const discoverAndAdd = async () => {
+    const q = discoverQuery.trim();
+    if (!q) {
+      toast({ title: 'أدخل موضوع البحث', description: 'مثال: روايات عربية، تاريخ إسلامي، البخلاء...', variant: 'destructive' });
+      return;
+    }
+    setDiscovering(true);
+    setDiscoverProgress({ phase: 'جارٍ البحث في archive.org...', done: 0, total: 0 });
+
+    try {
+      // 1) البحث
+      const { data: searchData, error: searchErr } = await supabase.functions.invoke('discover-archive-books', {
+        body: { query: q, limit: discoverLimit, useMistral: true },
+      });
+      if (searchErr) throw new Error(searchErr.message);
+      if (!searchData?.success) throw new Error(searchData?.error || 'فشل البحث');
+
+      const items: { identifier: string; title: string; details_url: string }[] = searchData.results || [];
+      if (items.length === 0) {
+        toast({ title: 'لا توجد نتائج', description: 'جرّب كلمات بحث مختلفة', variant: 'destructive' });
+        return;
+      }
+
+      // فلترة المعرّفات المضافة مسبقًا
+      const existingUrls = new Set(books.map((b) => b.book_file_url));
+
+      setDiscoverProgress({ phase: 'استخراج روابط PDF...', done: 0, total: items.length });
+      const extracted: SimpleBook[] = [];
+      const errors: string[] = [];
+
+      // 2) استخراج رابط PDF لكل عنصر بالتوازي بدفعات
+      const CONCURRENCY = 5;
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
+        while (cursor < items.length) {
+          const idx = cursor++;
+          const item = items[idx];
+          try {
+            const { data, error } = await supabase.functions.invoke('extract-archive-book-link', {
+              body: { pageUrl: item.details_url },
+            });
+            if (error) throw new Error(error.message);
+            if (data?.success && data?.book_file_url && !existingUrls.has(data.book_file_url)) {
+              extracted.push({
+                title: (data.title || item.title || '').trim() || item.identifier,
+                book_file_url: data.book_file_url,
+              });
+              existingUrls.add(data.book_file_url);
+            } else if (!data?.success) {
+              errors.push(`${item.identifier}: ${data?.error || 'فشل الاستخراج'}`);
+            }
+          } catch (e: any) {
+            errors.push(`${item.identifier}: ${e.message || 'خطأ'}`);
+          }
+          setDiscoverProgress((p) => ({ ...p, done: p.done + 1 }));
+        }
+      });
+      await Promise.all(workers);
+
+      if (extracted.length > 0) {
+        setBooks((prev) => {
+          const existing = new Set(prev.map((b) => b.book_file_url));
+          const merged = [...prev];
+          for (const b of extracted) {
+            if (!existing.has(b.book_file_url)) {
+              merged.push(b);
+              existing.add(b.book_file_url);
+            }
+          }
+          return merged.slice(0, MAX_BOOKS_PER_RUN);
+        });
+      }
+
+      toast({
+        title: 'اكتمل الاكتشاف',
+        description: `تم العثور على ${items.length} كتاب • أُضيف ${extracted.length} للقائمة` + (errors.length ? ` • فشل ${errors.length}` : ''),
+      });
+      if (errors.length) console.warn('Discovery errors:', errors);
+    } catch (e: any) {
+      toast({ title: 'فشل الاكتشاف', description: e.message || 'خطأ غير متوقع', variant: 'destructive' });
+    } finally {
+      setDiscovering(false);
+      setDiscoverProgress({ phase: '', done: 0, total: 0 });
+    }
+  };
+
 
   const downloadSample = () => {
     const blob = new Blob([SAMPLE_CSV], { type: 'text/csv;charset=utf-8;' });
@@ -526,6 +618,75 @@ https://archive.org/download/.../روائع من التاريخ العثماني
               تجهيز هذه الصفوف للرفع
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-primary/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Sparkles className="h-5 w-5 text-primary" />
+            اكتشاف ورفع تلقائي كامل من Archive.org عبر Mistral AI
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Alert>
+            <Sparkles className="h-4 w-4" />
+            <AlertDescription>
+              فقط أدخل <strong>موضوع البحث</strong> (مثلاً: «روايات عربية» أو «تاريخ إسلامي»)، وسيقوم Mistral AI بـ:
+              <br />
+              ١) البحث في archive.org وجلب <strong>روابط details</strong> تلقائيًا.
+              <br />
+              ٢) فتح كل صفحة واستخراج <strong>رابط ملف PDF المباشر</strong>.
+              <br />
+              ٣) إضافة الكتب غير المكررة إلى قائمة الرفع. ثم اضغط «ابدأ الرفع» في الأسفل.
+            </AlertDescription>
+          </Alert>
+          <div className="grid grid-cols-1 md:grid-cols-[2fr_auto_auto] gap-3 items-end">
+            <div>
+              <Label className="text-xs">موضوع البحث</Label>
+              <Input
+                value={discoverQuery}
+                onChange={(e) => setDiscoverQuery(e.target.value)}
+                placeholder="روايات عربية، تاريخ، أدب، فقه..."
+                disabled={discovering || uploading}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">عدد الكتب</Label>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                value={discoverLimit}
+                onChange={(e) => setDiscoverLimit(Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)))}
+                disabled={discovering || uploading}
+                className="w-24"
+              />
+            </div>
+            <Button onClick={discoverAndAdd} disabled={discovering || uploading || !discoverQuery.trim()}>
+              {discovering ? (
+                <>
+                  <Loader2 className="ml-2 h-4 w-4 animate-spin" />
+                  {discoverProgress.total > 0
+                    ? `${discoverProgress.done}/${discoverProgress.total}`
+                    : 'جارٍ البحث...'}
+                </>
+              ) : (
+                <>
+                  <Sparkles className="ml-2 h-4 w-4" />
+                  اكتشف وأضف تلقائيًا
+                </>
+              )}
+            </Button>
+          </div>
+          {discovering && (
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">{discoverProgress.phase}</div>
+              {discoverProgress.total > 0 && (
+                <Progress value={(discoverProgress.done / discoverProgress.total) * 100} />
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
