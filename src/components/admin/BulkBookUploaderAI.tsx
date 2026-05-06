@@ -529,6 +529,57 @@ https://archive.org/download/.../روائع من التاريخ العثماني
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Link2 className="h-4 w-4" />
+            استخراج روابط PDF تلقائيًا من صفحات archive.org عبر Mistral AI
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Alert>
+            <Sparkles className="h-4 w-4" />
+            <AlertDescription>
+              ألصق روابط <strong>صفحات الكتب</strong> على archive.org (مثال:{' '}
+              <code className="text-xs">https://archive.org/details/20220728_20220728_1119</code>) — سطر لكل رابط.
+              سيقوم الذكاء الاصطناعي باستخراج رابط ملف PDF المباشر تلقائيًا (مثال:{' '}
+              <code className="text-xs">https://archive.org/download/.../file.pdf</code>) وإضافته إلى قائمة الرفع
+              بدون تكرار.
+            </AlertDescription>
+          </Alert>
+          <Textarea
+            value={pageLinksText}
+            onChange={(e) => setPageLinksText(e.target.value)}
+            placeholder={`https://archive.org/details/20220728_20220728_1119
+https://archive.org/details/another-book-id`}
+            rows={6}
+            disabled={extracting || uploading}
+            className="font-mono text-sm"
+            dir="ltr"
+          />
+          <div className="flex items-center gap-3">
+            <Button onClick={extractFromArchivePages} disabled={extracting || uploading || !pageLinksText.trim()}>
+              {extracting ? (
+                <>
+                  <Loader2 className="ml-2 h-4 w-4 animate-spin" />
+                  جارٍ الاستخراج {extractProgress.done}/{extractProgress.total}
+                </>
+              ) : (
+                <>
+                  <Sparkles className="ml-2 h-4 w-4" />
+                  استخراج روابط PDF بالذكاء الاصطناعي
+                </>
+              )}
+            </Button>
+            {extracting && extractProgress.total > 0 && (
+              <div className="flex-1">
+                <Progress value={(extractProgress.done / extractProgress.total) * 100} />
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
       <BackgroundQueuePanel books={books} disabled={uploading} />
 
       {books.length > 0 && (
