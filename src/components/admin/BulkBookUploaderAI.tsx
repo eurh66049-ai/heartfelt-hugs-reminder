@@ -621,6 +621,75 @@ https://archive.org/download/.../روائع من التاريخ العثماني
         </CardContent>
       </Card>
 
+      <Card className="border-primary/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Sparkles className="h-5 w-5 text-primary" />
+            اكتشاف ورفع تلقائي كامل من Archive.org عبر Mistral AI
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Alert>
+            <Sparkles className="h-4 w-4" />
+            <AlertDescription>
+              فقط أدخل <strong>موضوع البحث</strong> (مثلاً: «روايات عربية» أو «تاريخ إسلامي»)، وسيقوم Mistral AI بـ:
+              <br />
+              ١) البحث في archive.org وجلب <strong>روابط details</strong> تلقائيًا.
+              <br />
+              ٢) فتح كل صفحة واستخراج <strong>رابط ملف PDF المباشر</strong>.
+              <br />
+              ٣) إضافة الكتب غير المكررة إلى قائمة الرفع. ثم اضغط «ابدأ الرفع» في الأسفل.
+            </AlertDescription>
+          </Alert>
+          <div className="grid grid-cols-1 md:grid-cols-[2fr_auto_auto] gap-3 items-end">
+            <div>
+              <Label className="text-xs">موضوع البحث</Label>
+              <Input
+                value={discoverQuery}
+                onChange={(e) => setDiscoverQuery(e.target.value)}
+                placeholder="روايات عربية، تاريخ، أدب، فقه..."
+                disabled={discovering || uploading}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">عدد الكتب</Label>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                value={discoverLimit}
+                onChange={(e) => setDiscoverLimit(Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)))}
+                disabled={discovering || uploading}
+                className="w-24"
+              />
+            </div>
+            <Button onClick={discoverAndAdd} disabled={discovering || uploading || !discoverQuery.trim()}>
+              {discovering ? (
+                <>
+                  <Loader2 className="ml-2 h-4 w-4 animate-spin" />
+                  {discoverProgress.total > 0
+                    ? `${discoverProgress.done}/${discoverProgress.total}`
+                    : 'جارٍ البحث...'}
+                </>
+              ) : (
+                <>
+                  <Sparkles className="ml-2 h-4 w-4" />
+                  اكتشف وأضف تلقائيًا
+                </>
+              )}
+            </Button>
+          </div>
+          {discovering && (
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">{discoverProgress.phase}</div>
+              {discoverProgress.total > 0 && (
+                <Progress value={(discoverProgress.done / discoverProgress.total) * 100} />
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
