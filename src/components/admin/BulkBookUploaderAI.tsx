@@ -168,6 +168,98 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     }
   };
 
+  // === الاكتشاف التلقائي: بحث في archive.org → استخراج روابط PDF → إضافة ===
+  const [discoverQuery, setDiscoverQuery] = useState('');
+  const [discoverLimit, setDiscoverLimit] = useState(30);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverProgress, setDiscoverProgress] = useState({ phase: '', done: 0, total: 0 });
+
+  const discoverAndAdd = async () => {
+    const q = discoverQuery.trim();
+    if (!q) {
+      toast({ title: 'أدخل موضوع البحث', description: 'مثال: روايات عربية، تاريخ إسلامي، البخلاء...', variant: 'destructive' });
+      return;
+    }
+    setDiscovering(true);
+    setDiscoverProgress({ phase: 'جارٍ البحث في archive.org...', done: 0, total: 0 });
+
+    try {
+      // 1) البحث
+      const { data: searchData, error: searchErr } = await supabase.functions.invoke('discover-archive-books', {
+        body: { query: q, limit: discoverLimit, useMistral: true },
+      });
+      if (searchErr) throw new Error(searchErr.message);
+      if (!searchData?.success) throw new Error(searchData?.error || 'فشل البحث');
+
+      const items: { identifier: string; title: string; details_url: string }[] = searchData.results || [];
+      if (items.length === 0) {
+        toast({ title: 'لا توجد نتائج', description: 'جرّب كلمات بحث مختلفة', variant: 'destructive' });
+        return;
+      }
+
+      // فلترة المعرّفات المضافة مسبقًا
+      const existingUrls = new Set(books.map((b) => b.book_file_url));
+
+      setDiscoverProgress({ phase: 'استخراج روابط PDF...', done: 0, total: items.length });
+      const extracted: SimpleBook[] = [];
+      const errors: string[] = [];
+
+      // 2) استخراج رابط PDF لكل عنصر بالتوازي بدفعات
+      const CONCURRENCY = 5;
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
+        while (cursor < items.length) {
+          const idx = cursor++;
+          const item = items[idx];
+          try {
+            const { data, error } = await supabase.functions.invoke('extract-archive-book-link', {
+              body: { pageUrl: item.details_url },
+            });
+            if (error) throw new Error(error.message);
+            if (data?.success && data?.book_file_url && !existingUrls.has(data.book_file_url)) {
+              extracted.push({
+                title: (data.title || item.title || '').trim() || item.identifier,
+                book_file_url: data.book_file_url,
+              });
+              existingUrls.add(data.book_file_url);
+            } else if (!data?.success) {
+              errors.push(`${item.identifier}: ${data?.error || 'فشل الاستخراج'}`);
+            }
+          } catch (e: any) {
+            errors.push(`${item.identifier}: ${e.message || 'خطأ'}`);
+          }
+          setDiscoverProgress((p) => ({ ...p, done: p.done + 1 }));
+        }
+      });
+      await Promise.all(workers);
+
+      if (extracted.length > 0) {
+        setBooks((prev) => {
+          const existing = new Set(prev.map((b) => b.book_file_url));
+          const merged = [...prev];
+          for (const b of extracted) {
+            if (!existing.has(b.book_file_url)) {
+              merged.push(b);
+              existing.add(b.book_file_url);
+            }
+          }
+          return merged.slice(0, MAX_BOOKS_PER_RUN);
+        });
+      }
+
+      toast({
+        title: 'اكتمل الاكتشاف',
+        description: `تم العثور على ${items.length} كتاب • أُضيف ${extracted.length} للقائمة` + (errors.length ? ` • فشل ${errors.length}` : ''),
+      });
+      if (errors.length) console.warn('Discovery errors:', errors);
+    } catch (e: any) {
+      toast({ title: 'فشل الاكتشاف', description: e.message || 'خطأ غير متوقع', variant: 'destructive' });
+    } finally {
+      setDiscovering(false);
+      setDiscoverProgress({ phase: '', done: 0, total: 0 });
+    }
+  };
+
 
   const downloadSample = () => {
     const blob = new Blob([SAMPLE_CSV], { type: 'text/csv;charset=utf-8;' });
