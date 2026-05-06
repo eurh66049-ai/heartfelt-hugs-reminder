@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-import { Upload, Download, Sparkles, FileText, Plus, Trash2, Play, Pause, X, CheckCircle, AlertTriangle, ClipboardPaste } from 'lucide-react';
+import { Upload, Download, Sparkles, FileText, Plus, Trash2, Play, Pause, X, CheckCircle, AlertTriangle, ClipboardPaste, Link2, Loader2 } from 'lucide-react';
 import Papa from 'papaparse';
 import BackgroundQueuePanel from './BackgroundQueuePanel';
 
