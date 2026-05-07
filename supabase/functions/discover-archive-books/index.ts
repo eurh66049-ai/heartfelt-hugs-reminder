@@ -7,17 +7,17 @@ const corsHeaders = {
 
 // تحسين استعلام البحث عبر Mistral AI (اختياري)
 async function refineQueryWithMistral(userQuery: string): Promise<string> {
-  const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
-  if (!lovableApiKey) return userQuery;
+  const mistralApiKey = Deno.env.get('MISTRAL_API_KEY');
+  if (!mistralApiKey) return userQuery;
   try {
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
+        'Authorization': `Bearer ${mistralApiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
+        model: 'mistral-large-latest',
         messages: [
           {
             role: 'system',
