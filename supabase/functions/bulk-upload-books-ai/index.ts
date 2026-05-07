@@ -287,18 +287,22 @@ async function discoverArchiveBooks(query: string, limit: number, supabaseClient
     if (normalizedTitle) existingTitles.add(normalizedTitle);
   }
 
-  const scrapeUrl = new URL("https://archive.org/services/search/v1/scrape");
-  scrapeUrl.searchParams.set("q", archiveQuery);
-  scrapeUrl.searchParams.set("fields", "identifier,title,creator,downloads");
-  scrapeUrl.searchParams.set("count", String(Math.min(Math.max(safeLimit * 3, 20), 100)));
+  const searchUrl = new URL("https://archive.org/advancedsearch.php");
+  searchUrl.searchParams.set("q", archiveQuery);
+  searchUrl.searchParams.append("fl[]", "identifier");
+  searchUrl.searchParams.append("fl[]", "title");
+  searchUrl.searchParams.append("fl[]", "creator");
+  searchUrl.searchParams.set("rows", String(Math.min(Math.max(safeLimit * 3, 20), 100)));
+  searchUrl.searchParams.set("page", "1");
+  searchUrl.searchParams.set("output", "json");
 
-  const searchRes = await fetch(scrapeUrl.toString(), {
+  const searchRes = await fetch(searchUrl.toString(), {
     headers: { "User-Agent": "KotobiAIBulkUploader/3.1", Accept: "application/json" },
   });
   if (!searchRes.ok) throw new Error(`archive.org HTTP ${searchRes.status}`);
 
   const searchData = await searchRes.json();
-  const items = Array.isArray(searchData?.items) ? searchData.items : [];
+  const items = Array.isArray(searchData?.response?.docs) ? searchData.response.docs : [];
   const discovered: ArchiveDiscoveryBook[] = [];
 
   for (const item of items) {
