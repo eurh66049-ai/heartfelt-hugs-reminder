@@ -232,6 +232,100 @@ function buildArchiveFirstPageImageUrl(bookUrl: string): string | null {
   }
 }
 
+function chooseBestArchivePdf(files: any[]): string | null {
+  const pdfs = files
+    .filter((file) => typeof file?.name === "string" && /\.pdf$/i.test(file.name))
+    .map((file) => ({
+      name: String(file.name),
+      size: Number.parseInt(String(file.size || "0"), 10) || 0,
+    }))
+    .filter((file) => file.name && !/_abbyy\.gz$/i.test(file.name));
+
+  if (!pdfs.length) return null;
+
+  const preferred = pdfs
+    .filter((file) => !/(?:_bw|_text|_djvu)\.pdf$/i.test(file.name))
+    .sort((a, b) => b.size - a.size);
+
+  return (preferred[0] || pdfs.sort((a, b) => b.size - a.size)[0]).name;
+}
+
+async function getArchiveBookDownload(identifier: string): Promise<{ title: string; book_file_url: string } | null> {
+  const metaRes = await fetch(`https://archive.org/metadata/${encodeURIComponent(identifier)}`, {
+    headers: { "User-Agent": "KotobiAIBulkUploader/3.1", Accept: "application/json" },
+  });
+  if (!metaRes.ok) return null;
+
+  const meta = await metaRes.json();
+  const fileName = chooseBestArchivePdf(Array.isArray(meta?.files) ? meta.files : []);
+  if (!fileName) return null;
+
+  return {
+    title: String(meta?.metadata?.title || identifier).trim() || identifier,
+    book_file_url: `https://archive.org/download/${encodeURIComponent(identifier)}/${encodeURI(fileName)}`,
+  };
+}
+
+async function discoverArchiveBooks(query: string, limit: number, supabaseClient: any): Promise<ArchiveDiscoveryBook[]> {
+  const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 80);
+  let archiveQuery = await refineArchiveQueryWithMistral(query.trim());
+  if (!/mediatype\s*:/i.test(archiveQuery)) archiveQuery = `(${archiveQuery}) AND mediatype:texts`;
+  if (!/format\s*:/i.test(archiveQuery)) archiveQuery = `(${archiveQuery}) AND format:PDF`;
+
+  const existingIdentifiers = new Set<string>();
+  const existingTitles = new Set<string>();
+  const { data: existingRows } = await supabaseClient
+    .from("book_submissions")
+    .select("title, source_book_file_url, book_file_url")
+    .eq("status", "approved")
+    .limit(1000);
+
+  for (const row of existingRows || []) {
+    const sourceIdentifier = extractArchiveIdentifierFromUrl(row.source_book_file_url) || extractArchiveIdentifierFromUrl(row.book_file_url);
+    if (sourceIdentifier) existingIdentifiers.add(sourceIdentifier);
+    const normalizedTitle = normalizeDuplicateTitle(String(row.title || ""));
+    if (normalizedTitle) existingTitles.add(normalizedTitle);
+  }
+
+  const scrapeUrl = new URL("https://archive.org/services/search/v1/scrape");
+  scrapeUrl.searchParams.set("q", archiveQuery);
+  scrapeUrl.searchParams.set("fields", "identifier,title,creator,downloads");
+  scrapeUrl.searchParams.set("count", String(Math.min(Math.max(safeLimit * 3, 20), 100)));
+
+  const searchRes = await fetch(scrapeUrl.toString(), {
+    headers: { "User-Agent": "KotobiAIBulkUploader/3.1", Accept: "application/json" },
+  });
+  if (!searchRes.ok) throw new Error(`archive.org HTTP ${searchRes.status}`);
+
+  const searchData = await searchRes.json();
+  const items = Array.isArray(searchData?.items) ? searchData.items : [];
+  const discovered: ArchiveDiscoveryBook[] = [];
+
+  for (const item of items) {
+    if (discovered.length >= safeLimit) break;
+    const identifier = String(item?.identifier || "").trim();
+    if (!identifier || existingIdentifiers.has(identifier)) continue;
+
+    const direct = await getArchiveBookDownload(identifier);
+    if (!direct?.book_file_url) continue;
+
+    const title = direct.title || String(Array.isArray(item.title) ? item.title[0] : item.title || identifier);
+    const normalizedTitle = normalizeDuplicateTitle(title);
+    if (normalizedTitle && existingTitles.has(normalizedTitle)) continue;
+
+    discovered.push({
+      identifier,
+      details_url: `https://archive.org/details/${encodeURIComponent(identifier)}`,
+      title,
+      book_file_url: direct.book_file_url,
+    });
+    existingIdentifiers.add(identifier);
+    if (normalizedTitle) existingTitles.add(normalizedTitle);
+  }
+
+  return discovered;
+}
+
 function generateSlug(title: string, author?: string): string {
   const clean = (s: string) =>
     s
