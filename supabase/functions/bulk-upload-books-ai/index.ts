@@ -104,6 +104,11 @@ interface BookResult {
   book_uploaded_to_supabase?: boolean;
 }
 
+interface ArchiveDiscoveryBook extends InputBook {
+  identifier: string;
+  details_url: string;
+}
+
 const ALLOWED_CATEGORIES = [
   "novels", "history", "philosophy", "religion", "science", "literature",
   "poetry", "biography", "psychology", "politics", "economics", "children",
@@ -146,6 +151,62 @@ function cleanBookDownloadUrl(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   const match = trimmed.match(/https?:\/\/.+?\.(?:pdf|docx?|txt)(?:\?[^\s]*)?/i);
   return (match?.[0] || trimmed).trim();
+}
+
+function normalizeDuplicateTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670]/g, "")
+    .replace(/[^\u0600-\u06FFa-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractArchiveIdentifierFromUrl(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl) return null;
+  try {
+    const url = new URL(rawUrl.split("#")[0]);
+    if (!url.hostname.includes("archive.org")) return null;
+    const match = url.pathname.match(/\/(?:details|download|stream|embed)\/([^/]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    const match = rawUrl.match(/archive\.org\/(?:details|download|stream|embed)\/([^/#?]+)/i);
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+}
+
+async function refineArchiveQueryWithMistral(userQuery: string): Promise<string> {
+  const MISTRAL_API_KEY = Deno.env.get("MISTRAL_API_KEY");
+  if (!MISTRAL_API_KEY) return userQuery;
+
+  try {
+    const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${MISTRAL_API_KEY}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        model: "mistral-large-latest",
+        temperature: 0.2,
+        max_tokens: 200,
+        messages: [
+          {
+            role: "system",
+            content: "حوّل طلب المستخدم إلى استعلام بحث صالح لـ archive.org Lucene للعثور على كتب PDF. أعد الاستعلام فقط بدون شرح.",
+          },
+          { role: "user", content: userQuery },
+        ],
+      }),
+    });
+    if (!response.ok) return userQuery;
+    const data = await response.json();
+    return String(data.choices?.[0]?.message?.content || userQuery).trim().replace(/^['\"]|['\"]$/g, "") || userQuery;
+  } catch (error) {
+    console.warn("[AI Bulk] فشل تحسين بحث archive.org عبر Mistral:", (error as Error)?.message);
+    return userQuery;
+  }
 }
 
 function buildArchiveFirstPageImageUrl(bookUrl: string): string | null {
