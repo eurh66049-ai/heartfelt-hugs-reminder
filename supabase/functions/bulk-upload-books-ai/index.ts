@@ -268,7 +268,9 @@ async function getArchiveBookDownload(identifier: string): Promise<{ title: stri
 
 async function discoverArchiveBooks(query: string, limit: number, supabaseClient: any): Promise<ArchiveDiscoveryBook[]> {
   const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 80);
-  let archiveQuery = await refineArchiveQueryWithMistral(query.trim());
+  const rawQuery = query.trim();
+  const hasArchiveSyntax = /\b(?:collection|mediatype|format|language|title|creator|subject)\s*:/i.test(rawQuery);
+  let archiveQuery = hasArchiveSyntax ? rawQuery : await refineArchiveQueryWithMistral(rawQuery);
   if (!/mediatype\s*:/i.test(archiveQuery)) archiveQuery = `(${archiveQuery}) AND mediatype:texts`;
   if (!/format\s*:/i.test(archiveQuery)) archiveQuery = `(${archiveQuery}) AND format:PDF`;
 
@@ -287,44 +289,48 @@ async function discoverArchiveBooks(query: string, limit: number, supabaseClient
     if (normalizedTitle) existingTitles.add(normalizedTitle);
   }
 
-  const searchUrl = new URL("https://archive.org/advancedsearch.php");
-  searchUrl.searchParams.set("q", archiveQuery);
-  searchUrl.searchParams.append("fl[]", "identifier");
-  searchUrl.searchParams.append("fl[]", "title");
-  searchUrl.searchParams.append("fl[]", "creator");
-  searchUrl.searchParams.set("rows", String(Math.min(Math.max(safeLimit * 3, 20), 100)));
-  searchUrl.searchParams.set("page", "1");
-  searchUrl.searchParams.set("output", "json");
-
-  const searchRes = await fetch(searchUrl.toString(), {
-    headers: { "User-Agent": "KotobiAIBulkUploader/3.1", Accept: "application/json" },
-  });
-  if (!searchRes.ok) throw new Error(`archive.org HTTP ${searchRes.status}`);
-
-  const searchData = await searchRes.json();
-  const items = Array.isArray(searchData?.response?.docs) ? searchData.response.docs : [];
   const discovered: ArchiveDiscoveryBook[] = [];
 
-  for (const item of items) {
-    if (discovered.length >= safeLimit) break;
-    const identifier = String(item?.identifier || "").trim();
-    if (!identifier || existingIdentifiers.has(identifier)) continue;
+  for (let page = 1; page <= 5 && discovered.length < safeLimit; page++) {
+    const searchUrl = new URL("https://archive.org/advancedsearch.php");
+    searchUrl.searchParams.set("q", archiveQuery);
+    searchUrl.searchParams.append("fl[]", "identifier");
+    searchUrl.searchParams.append("fl[]", "title");
+    searchUrl.searchParams.append("fl[]", "creator");
+    searchUrl.searchParams.set("rows", "100");
+    searchUrl.searchParams.set("page", String(page));
+    searchUrl.searchParams.set("output", "json");
 
-    const direct = await getArchiveBookDownload(identifier);
-    if (!direct?.book_file_url) continue;
-
-    const title = direct.title || String(Array.isArray(item.title) ? item.title[0] : item.title || identifier);
-    const normalizedTitle = normalizeDuplicateTitle(title);
-    if (normalizedTitle && existingTitles.has(normalizedTitle)) continue;
-
-    discovered.push({
-      identifier,
-      details_url: `https://archive.org/details/${encodeURIComponent(identifier)}`,
-      title,
-      book_file_url: direct.book_file_url,
+    const searchRes = await fetch(searchUrl.toString(), {
+      headers: { "User-Agent": "KotobiAIBulkUploader/3.1", Accept: "application/json" },
     });
-    existingIdentifiers.add(identifier);
-    if (normalizedTitle) existingTitles.add(normalizedTitle);
+    if (!searchRes.ok) throw new Error(`archive.org HTTP ${searchRes.status}`);
+
+    const searchData = await searchRes.json();
+    const items = Array.isArray(searchData?.response?.docs) ? searchData.response.docs : [];
+    if (!items.length) break;
+
+    for (const item of items) {
+      if (discovered.length >= safeLimit) break;
+      const identifier = String(item?.identifier || "").trim();
+      if (!identifier || existingIdentifiers.has(identifier)) continue;
+
+      const direct = await getArchiveBookDownload(identifier);
+      if (!direct?.book_file_url) continue;
+
+      const title = direct.title || String(Array.isArray(item.title) ? item.title[0] : item.title || identifier);
+      const normalizedTitle = normalizeDuplicateTitle(title);
+      if (normalizedTitle && existingTitles.has(normalizedTitle)) continue;
+
+      discovered.push({
+        identifier,
+        details_url: `https://archive.org/details/${encodeURIComponent(identifier)}`,
+        title,
+        book_file_url: direct.book_file_url,
+      });
+      existingIdentifiers.add(identifier);
+      if (normalizedTitle) existingTitles.add(normalizedTitle);
+    }
   }
 
   return discovered;
