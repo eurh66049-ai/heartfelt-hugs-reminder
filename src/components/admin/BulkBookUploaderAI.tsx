@@ -184,14 +184,14 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
     setDiscoverProgress({ phase: 'جارٍ البحث في archive.org...', done: 0, total: 0 });
 
     try {
-      // 1) البحث
-      const { data: searchData, error: searchErr } = await supabase.functions.invoke('discover-archive-books', {
-        body: { query: q, limit: discoverLimit, useMistral: true },
+      // 1) البحث داخل الدالة المنشورة نفسها حتى لا يفشل الطلب إذا لم تكن دوال الاكتشاف الجديدة منشورة
+      const { data: searchData, error: searchErr } = await supabase.functions.invoke('bulk-upload-books-ai', {
+        body: { discoverArchiveBooks: true, query: q, limit: discoverLimit, upload: false },
       });
       if (searchErr) throw new Error(searchErr.message);
       if (!searchData?.success) throw new Error(searchData?.error || 'فشل البحث');
 
-      const items: { identifier: string; title: string; details_url: string }[] = searchData.results || [];
+      const items: { identifier: string; title: string; details_url: string; book_file_url: string }[] = searchData.books || [];
       if (items.length === 0) {
         toast({ title: 'لا توجد نتائج', description: 'جرّب كلمات بحث مختلفة', variant: 'destructive' });
         return;
@@ -200,38 +200,14 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
       // فلترة المعرّفات المضافة مسبقًا
       const existingUrls = new Set(books.map((b) => b.book_file_url));
 
-      setDiscoverProgress({ phase: 'استخراج روابط PDF...', done: 0, total: items.length });
-      const extracted: SimpleBook[] = [];
+      setDiscoverProgress({ phase: 'إضافة روابط PDF...', done: items.length, total: items.length });
+      const extracted: SimpleBook[] = items
+        .filter((item) => item.book_file_url && !existingUrls.has(item.book_file_url))
+        .map((item) => ({
+          title: (item.title || '').trim() || item.identifier,
+          book_file_url: item.book_file_url,
+        }));
       const errors: string[] = [];
-
-      // 2) استخراج رابط PDF لكل عنصر بالتوازي بدفعات
-      const CONCURRENCY = 5;
-      let cursor = 0;
-      const workers = Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
-        while (cursor < items.length) {
-          const idx = cursor++;
-          const item = items[idx];
-          try {
-            const { data, error } = await supabase.functions.invoke('extract-archive-book-link', {
-              body: { pageUrl: item.details_url },
-            });
-            if (error) throw new Error(error.message);
-            if (data?.success && data?.book_file_url && !existingUrls.has(data.book_file_url)) {
-              extracted.push({
-                title: (data.title || item.title || '').trim() || item.identifier,
-                book_file_url: data.book_file_url,
-              });
-              existingUrls.add(data.book_file_url);
-            } else if (!data?.success) {
-              errors.push(`${item.identifier}: ${data?.error || 'فشل الاستخراج'}`);
-            }
-          } catch (e: any) {
-            errors.push(`${item.identifier}: ${e.message || 'خطأ'}`);
-          }
-          setDiscoverProgress((p) => ({ ...p, done: p.done + 1 }));
-        }
-      });
-      await Promise.all(workers);
 
       if (extracted.length > 0) {
         setBooks((prev) => {
@@ -249,7 +225,7 @@ const BulkBookUploaderAI: React.FC<BulkBookUploaderAIProps> = ({ onUploadComplet
 
       toast({
         title: 'اكتمل الاكتشاف',
-        description: `تم العثور على ${items.length} كتاب • أُضيف ${extracted.length} للقائمة` + (errors.length ? ` • فشل ${errors.length}` : ''),
+        description: `تم العثور على ${items.length} كتاب غير مكرر • أُضيف ${extracted.length} للقائمة`,
       });
       if (errors.length) console.warn('Discovery errors:', errors);
     } catch (e: any) {

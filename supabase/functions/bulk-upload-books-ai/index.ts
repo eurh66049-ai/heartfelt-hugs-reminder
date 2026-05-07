@@ -104,6 +104,11 @@ interface BookResult {
   book_uploaded_to_supabase?: boolean;
 }
 
+interface ArchiveDiscoveryBook extends InputBook {
+  identifier: string;
+  details_url: string;
+}
+
 const ALLOWED_CATEGORIES = [
   "novels", "history", "philosophy", "religion", "science", "literature",
   "poetry", "biography", "psychology", "politics", "economics", "children",
@@ -148,6 +153,62 @@ function cleanBookDownloadUrl(rawUrl: string): string {
   return (match?.[0] || trimmed).trim();
 }
 
+function normalizeDuplicateTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670]/g, "")
+    .replace(/[^\u0600-\u06FFa-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractArchiveIdentifierFromUrl(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl) return null;
+  try {
+    const url = new URL(rawUrl.split("#")[0]);
+    if (!url.hostname.includes("archive.org")) return null;
+    const match = url.pathname.match(/\/(?:details|download|stream|embed)\/([^/]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    const match = rawUrl.match(/archive\.org\/(?:details|download|stream|embed)\/([^/#?]+)/i);
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+}
+
+async function refineArchiveQueryWithMistral(userQuery: string): Promise<string> {
+  const MISTRAL_API_KEY = Deno.env.get("MISTRAL_API_KEY");
+  if (!MISTRAL_API_KEY) return userQuery;
+
+  try {
+    const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${MISTRAL_API_KEY}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        model: "mistral-large-latest",
+        temperature: 0.2,
+        max_tokens: 200,
+        messages: [
+          {
+            role: "system",
+            content: "حوّل طلب المستخدم إلى استعلام بحث صالح لـ archive.org Lucene للعثور على كتب PDF. أعد الاستعلام فقط بدون شرح.",
+          },
+          { role: "user", content: userQuery },
+        ],
+      }),
+    });
+    if (!response.ok) return userQuery;
+    const data = await response.json();
+    return String(data.choices?.[0]?.message?.content || userQuery).trim().replace(/^['\"]|['\"]$/g, "") || userQuery;
+  } catch (error) {
+    console.warn("[AI Bulk] فشل تحسين بحث archive.org عبر Mistral:", (error as Error)?.message);
+    return userQuery;
+  }
+}
+
 function buildArchiveFirstPageImageUrl(bookUrl: string): string | null {
   try {
     const url = new URL(normalizeDownloadUrl(bookUrl));
@@ -169,6 +230,115 @@ function buildArchiveFirstPageImageUrl(bookUrl: string): string | null {
   } catch {
     return null;
   }
+}
+
+function chooseBestArchivePdf(files: any[]): string | null {
+  const pdfs = files
+    .filter((file) => typeof file?.name === "string" && /\.pdf$/i.test(file.name))
+    .map((file) => ({
+      name: String(file.name),
+      size: Number.parseInt(String(file.size || "0"), 10) || 0,
+    }))
+    .filter((file) => file.name && !/_abbyy\.gz$/i.test(file.name));
+
+  if (!pdfs.length) return null;
+
+  const preferred = pdfs
+    .filter((file) => !/(?:_bw|_text|_djvu)\.pdf$/i.test(file.name))
+    .sort((a, b) => b.size - a.size);
+
+  return (preferred[0] || pdfs.sort((a, b) => b.size - a.size)[0]).name;
+}
+
+async function getArchiveBookDownload(identifier: string): Promise<{ title: string; book_file_url: string } | null> {
+  const metaRes = await fetch(`https://archive.org/metadata/${encodeURIComponent(identifier)}`, {
+    headers: { "User-Agent": "KotobiAIBulkUploader/3.1", Accept: "application/json" },
+  });
+  if (!metaRes.ok) return null;
+
+  const meta = await metaRes.json();
+  const fileName = chooseBestArchivePdf(Array.isArray(meta?.files) ? meta.files : []);
+  if (!fileName) return null;
+
+  return {
+    title: String(meta?.metadata?.title || identifier).trim() || identifier,
+    book_file_url: `https://archive.org/download/${encodeURIComponent(identifier)}/${encodeURI(fileName)}`,
+  };
+}
+
+async function discoverArchiveBooks(query: string, limit: number, supabaseClient: any): Promise<ArchiveDiscoveryBook[]> {
+  const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 80);
+  const rawQuery = query.trim();
+  const hasArchiveSyntax = /\b(?:collection|mediatype|format|language|title|creator|subject)\s*:/i.test(rawQuery);
+  let archiveQuery = hasArchiveSyntax ? rawQuery : await refineArchiveQueryWithMistral(rawQuery);
+  if (!/mediatype\s*:/i.test(archiveQuery)) archiveQuery = `(${archiveQuery}) AND mediatype:texts`;
+  if (!/format\s*:/i.test(archiveQuery)) archiveQuery = `(${archiveQuery}) AND format:PDF`;
+  const rawArchiveQuery = /mediatype\s*:/i.test(rawQuery)
+    ? rawQuery
+    : `(${rawQuery}) AND mediatype:texts AND format:PDF`;
+  const queryCandidates = [archiveQuery];
+  if (rawArchiveQuery !== archiveQuery) queryCandidates.push(rawArchiveQuery);
+
+  const existingIdentifiers = new Set<string>();
+  const existingTitles = new Set<string>();
+  const { data: existingRows } = await supabaseClient
+    .from("book_submissions")
+    .select("title, source_book_file_url, book_file_url")
+    .eq("status", "approved")
+    .limit(1000);
+
+  for (const row of existingRows || []) {
+    const sourceIdentifier = extractArchiveIdentifierFromUrl(row.source_book_file_url) || extractArchiveIdentifierFromUrl(row.book_file_url);
+    if (sourceIdentifier) existingIdentifiers.add(sourceIdentifier);
+    const normalizedTitle = normalizeDuplicateTitle(String(row.title || ""));
+    if (normalizedTitle) existingTitles.add(normalizedTitle);
+  }
+
+  const discovered: ArchiveDiscoveryBook[] = [];
+
+  for (const currentArchiveQuery of queryCandidates) for (let page = 1; page <= 5 && discovered.length < safeLimit; page++) {
+    const searchUrl = new URL("https://archive.org/advancedsearch.php");
+    searchUrl.searchParams.set("q", currentArchiveQuery);
+    searchUrl.searchParams.append("fl[]", "identifier");
+    searchUrl.searchParams.append("fl[]", "title");
+    searchUrl.searchParams.append("fl[]", "creator");
+    searchUrl.searchParams.set("rows", "100");
+    searchUrl.searchParams.set("page", String(page));
+    searchUrl.searchParams.set("output", "json");
+
+    const searchRes = await fetch(searchUrl.toString(), {
+      headers: { "User-Agent": "KotobiAIBulkUploader/3.1", Accept: "application/json" },
+    });
+    if (!searchRes.ok) throw new Error(`archive.org HTTP ${searchRes.status}`);
+
+    const searchData = await searchRes.json();
+    const items = Array.isArray(searchData?.response?.docs) ? searchData.response.docs : [];
+    if (!items.length) break;
+
+    for (const item of items) {
+      if (discovered.length >= safeLimit) break;
+      const identifier = String(item?.identifier || "").trim();
+      if (!identifier || existingIdentifiers.has(identifier)) continue;
+
+      const direct = await getArchiveBookDownload(identifier);
+      if (!direct?.book_file_url) continue;
+
+      const title = direct.title || String(Array.isArray(item.title) ? item.title[0] : item.title || identifier);
+      const normalizedTitle = normalizeDuplicateTitle(title);
+      if (normalizedTitle && existingTitles.has(normalizedTitle)) continue;
+
+      discovered.push({
+        identifier,
+        details_url: `https://archive.org/details/${encodeURIComponent(identifier)}`,
+        title,
+        book_file_url: direct.book_file_url,
+      });
+      existingIdentifiers.add(identifier);
+      if (normalizedTitle) existingTitles.add(normalizedTitle);
+    }
+  }
+
+  return discovered;
 }
 
 function generateSlug(title: string, author?: string): string {
@@ -783,6 +953,27 @@ serve(async (req) => {
         },
         results,
       });
+    }
+
+    if (body?.discoverArchiveBooks) {
+      const query = String(body.query || "").trim();
+      if (!query) return jsonResponse({ success: false, error: "أدخل موضوع البحث" }, 400);
+
+      const discoveredBooks = await discoverArchiveBooks(query, Number(body.limit) || 20, supabaseClient);
+      if (body.upload === false) {
+        return jsonResponse({ success: true, discovered: discoveredBooks.length, books: discoveredBooks });
+      }
+
+      const results = discoveredBooks.length ? await processBooks(discoveredBooks, supabaseClient) : [];
+      const summary = {
+        discovered: discoveredBooks.length,
+        total: results.length,
+        success: results.filter((r) => r.success).length,
+        failed: results.filter((r) => !r.success).length,
+        retryable: results.filter((r) => r.retryable).length,
+      };
+
+      return jsonResponse({ success: true, summary, results, retry_after_ms: summary.retryable ? 30_000 : 0 });
     }
 
     const books: InputBook[] = Array.isArray(body?.books)
