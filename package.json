@@ -49,7 +49,7 @@
     "@react-pdf-viewer/page-navigation": "^3.12.0",
     "@react-pdf-viewer/scroll-mode": "^3.12.0",
     "@react-pdf-viewer/zoom": "^3.12.0",
-    "@supabase/supabase-js": "^2.105.1",
+    "@supabase/supabase-js": "^2.105.3",
     "@tanstack/react-query": "^5.83.0",
     "@tanstack/react-router": "^1.168.23",
     "@tanstack/react-start": "^1.167.42",
