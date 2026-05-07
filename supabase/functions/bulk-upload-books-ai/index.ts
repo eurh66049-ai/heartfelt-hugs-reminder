@@ -273,6 +273,11 @@ async function discoverArchiveBooks(query: string, limit: number, supabaseClient
   let archiveQuery = hasArchiveSyntax ? rawQuery : await refineArchiveQueryWithMistral(rawQuery);
   if (!/mediatype\s*:/i.test(archiveQuery)) archiveQuery = `(${archiveQuery}) AND mediatype:texts`;
   if (!/format\s*:/i.test(archiveQuery)) archiveQuery = `(${archiveQuery}) AND format:PDF`;
+  const rawArchiveQuery = /mediatype\s*:/i.test(rawQuery)
+    ? rawQuery
+    : `(${rawQuery}) AND mediatype:texts AND format:PDF`;
+  const queryCandidates = [archiveQuery];
+  if (rawArchiveQuery !== archiveQuery) queryCandidates.push(rawArchiveQuery);
 
   const existingIdentifiers = new Set<string>();
   const existingTitles = new Set<string>();
@@ -291,9 +296,9 @@ async function discoverArchiveBooks(query: string, limit: number, supabaseClient
 
   const discovered: ArchiveDiscoveryBook[] = [];
 
-  for (let page = 1; page <= 5 && discovered.length < safeLimit; page++) {
+  for (const currentArchiveQuery of queryCandidates) for (let page = 1; page <= 5 && discovered.length < safeLimit; page++) {
     const searchUrl = new URL("https://archive.org/advancedsearch.php");
-    searchUrl.searchParams.set("q", archiveQuery);
+    searchUrl.searchParams.set("q", currentArchiveQuery);
     searchUrl.searchParams.append("fl[]", "identifier");
     searchUrl.searchParams.append("fl[]", "title");
     searchUrl.searchParams.append("fl[]", "creator");
