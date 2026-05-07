@@ -940,6 +940,27 @@ serve(async (req) => {
       });
     }
 
+    if (body?.discoverArchiveBooks) {
+      const query = String(body.query || "").trim();
+      if (!query) return jsonResponse({ success: false, error: "أدخل موضوع البحث" }, 400);
+
+      const discoveredBooks = await discoverArchiveBooks(query, Number(body.limit) || 20, supabaseClient);
+      if (body.upload === false) {
+        return jsonResponse({ success: true, discovered: discoveredBooks.length, books: discoveredBooks });
+      }
+
+      const results = discoveredBooks.length ? await processBooks(discoveredBooks, supabaseClient) : [];
+      const summary = {
+        discovered: discoveredBooks.length,
+        total: results.length,
+        success: results.filter((r) => r.success).length,
+        failed: results.filter((r) => !r.success).length,
+        retryable: results.filter((r) => r.retryable).length,
+      };
+
+      return jsonResponse({ success: true, summary, results, retry_after_ms: summary.retryable ? 30_000 : 0 });
+    }
+
     const books: InputBook[] = Array.isArray(body?.books)
       ? body.books
       : body?.book
